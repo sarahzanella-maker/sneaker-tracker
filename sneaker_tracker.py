@@ -20,12 +20,6 @@ SETTINGS_SHEET_NAME = "Settings"
 RESULTS_SHEET_NAME = "Results"
 
 
-REQUIRED_KEYWORDS = [
-    "tropical pink",
-    "pink pack",
-    "iq7604-101",
-]
-
 BLOCKED_KEYWORDS = [
     "iq7605-101",
     "preschool",
@@ -46,6 +40,13 @@ BLOCKED_KEYWORDS = [
     "air force",
     "dunk",
     "air max",
+    "nocta",
+    "glide",
+    "hikvision",
+    "registratore",
+    "nvr",
+    "camera",
+    "ds-7604",
 ]
 
 
@@ -72,14 +73,11 @@ def normalize(value):
 def read_settings(settings_ws):
     rows = settings_ws.get_all_records()
     settings = {}
-
     for row in rows:
         key = normalize(row.get("Parameter", ""))
         value = normalize(row.get("Value", ""))
-
         if key:
             settings[key] = value
-
     return settings
 
 
@@ -93,53 +91,40 @@ def domain_from_url(url):
 def parse_price(value):
     if value is None:
         return None
-
     text = str(value).replace(",", ".")
     match = re.search(r"(\d+[.]?\d*)", text)
-
     if not match:
         return None
-
     try:
         return float(match.group(1))
     except Exception:
         return None
 
 
-def passes_quality_filter(text):
-    text = f" {text.lower()} "
+def passes_quality_filter(title, source, link, sku):
+    text = f" {title} {source} {link} ".lower()
 
-    has_blocked = any(keyword in text for keyword in BLOCKED_KEYWORDS)
+    if any(blocked in text for blocked in BLOCKED_KEYWORDS):
+        return False
 
-    has_full_sku = "iq7604-101" in text
+    has_full_sku = sku.lower() in text
 
-    has_name = (
+    has_exact_name = (
         "travis" in text
         and "scott" in text
         and "tropical" in text
         and "pink" in text
     )
 
-    has_sneaker_context = any(keyword in text for keyword in [
-        "jordan",
-        "air jordan",
-        "aj1",
-        "retro low",
-        "low og",
-        "nike",
-        "sneaker",
-        "sneakers",
-        "nocta",
-        "glide",
-        "hikvision",
-        "registratore",
-        "nvr",
-        "camera",
-        "ip ",
-        "ds-7604",
-    ])
+    has_jordan_context = (
+        "jordan" in text
+        or "air jordan" in text
+        or "aj1" in text
+        or "retro low" in text
+        or "low og" in text
+    )
 
-    return (has_full_sku or has_name) and has_sneaker_context and not has_blocked
+    return (has_full_sku or has_exact_name) and has_jordan_context
 
 
 def serpapi_shopping_search(query, max_results):
@@ -151,10 +136,8 @@ def serpapi_shopping_search(query, max_results):
         "hl": "it",
         "num": max_results,
     }
-
     response = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
     response.raise_for_status()
-
     data = response.json()
     return data.get("shopping_results", [])
 
@@ -168,10 +151,8 @@ def serpapi_google_search(query, max_results):
         "hl": "it",
         "num": max_results,
     }
-
     response = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
     response.raise_for_status()
-
     data = response.json()
     return data.get("organic_results", [])
 
@@ -197,7 +178,6 @@ def write_rows_to_results(results_ws, rows):
 
 def main():
     sheet = connect_sheet()
-
     sources_ws = sheet.worksheet(SOURCE_SHEET_NAME)
     settings_ws = sheet.worksheet(SETTINGS_SHEET_NAME)
     results_ws = sheet.worksheet(RESULTS_SHEET_NAME)
@@ -213,7 +193,6 @@ def main():
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     allowed_domains = []
-
     for row in source_rows:
         active = normalize(row.get("ATTIVO", "")).upper()
         enabled = normalize(row.get("Enabled", "")).upper()
@@ -225,8 +204,8 @@ def main():
                 allowed_domains.append(domain)
 
     queries = [
-        f'"{sku}"',
-        f'"{search_term}" "tropical pink"',
+        f'"{sku}" "Jordan"',
+        f'"Travis Scott" "Tropical Pink" "Jordan"',
         f'"Jordan 1 Low" "Travis Scott" "Tropical Pink"',
     ]
 
@@ -240,19 +219,8 @@ def main():
         except Exception as error:
             shopping_results = []
             found_rows.append([
-                now,
-                "SYSTEM",
-                sku,
-                "",
-                "",
-                "",
-                "",
-                "",
-                f"Shopping search error: {error}",
-                "",
-                "",
-                "SerpAPI",
-                query,
+                now, "SYSTEM", sku, "", "", "", "", "",
+                f"Shopping search error: {error}", "", "", "SerpAPI", query
             ])
 
         for item in shopping_results:
@@ -262,9 +230,7 @@ def main():
             price_text = item.get("price", "")
             price = item.get("extracted_price") or parse_price(price_text)
 
-            full_text = f"{title} {source} {link}"
-
-            if not passes_quality_filter(full_text):
+            if not passes_quality_filter(title, source, link, sku):
                 rejected_count += 1
                 continue
 
@@ -279,7 +245,7 @@ def main():
                 price if price is not None else "",
                 "",
                 price if price is not None else "",
-                "Possible match - filtered",
+                "Possible match - strict filter",
                 "",
                 link,
                 "Google Shopping",
@@ -293,25 +259,14 @@ def main():
 
     try:
         organic_results = serpapi_google_search(
-            f'"{sku}" OR "{search_term}" "Tropical Pink"',
+            f'"{sku}" "Jordan" OR "Travis Scott" "Tropical Pink" "Jordan"',
             max_results,
         )
     except Exception as error:
         organic_results = []
         found_rows.append([
-            now,
-            "SYSTEM",
-            sku,
-            "",
-            "",
-            "",
-            "",
-            "",
-            f"Google search error: {error}",
-            "",
-            "",
-            "SerpAPI",
-            "",
+            now, "SYSTEM", sku, "", "", "", "", "",
+            f"Google search error: {error}", "", "", "SerpAPI", ""
         ])
 
     for item in organic_results:
@@ -320,12 +275,10 @@ def main():
         snippet = item.get("snippet", "")
         domain = domain_from_url(link)
 
-        full_text = f"{title} {snippet} {link}"
-
         if allowed_domains and domain not in allowed_domains:
             continue
 
-        if not passes_quality_filter(full_text):
+        if not passes_quality_filter(title + " " + snippet, domain, link, sku):
             rejected_count += 1
             continue
 
@@ -338,7 +291,7 @@ def main():
             "",
             "",
             "",
-            "Found page - filtered",
+            "Found page - strict filter",
             "",
             link,
             "Google Search",
@@ -354,7 +307,7 @@ def main():
     write_rows_to_results(results_ws, found_rows)
 
     summary = (
-        "🔍 Sneaker Tracker V6\n\n"
+        "🔍 Sneaker Tracker V6.1\n\n"
         f"Risultati validi: {len(found_rows)}\n"
         f"Scartati dal filtro: {rejected_count}\n"
         f"Possibili alert ≤ {alert_2} €: {len(alert_rows)}"
@@ -362,12 +315,10 @@ def main():
 
     if alert_rows:
         first_alerts = alert_rows[:5]
-
         details = "\n\n".join([
             f"🚨 {row[1]}\nPrezzo: {row[5]} €\nLink: {row[10]}\nTitolo: {row[12]}"
             for row in first_alerts
         ])
-
         send_telegram(summary + "\n\n" + details)
     else:
         send_telegram(summary + "\n\nNessun risultato sotto soglia trovato per ora.")
