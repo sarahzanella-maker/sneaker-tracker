@@ -33,6 +33,12 @@ BLOCKED = [
     "registratore", "nvr", "camera", "ds-7604"
 ]
 
+NON_PRODUCT_DOMAINS = [
+    "instagram.com", "facebook.com", "tiktok.com", "youtube.com",
+    "lesitedelasneaker.com", "sneakernews.com", "soleretriever.com",
+    "hypebeast.com", "nicekicks.com", "complex.com"
+]
+
 
 def send_telegram(message):
     requests.post(
@@ -52,17 +58,17 @@ def connect_sheet():
     return gspread.authorize(credentials).open_by_key(GOOGLE_SHEET_ID)
 
 
-def normalize(value):
-    return str(value).strip()
+def normalize(v):
+    return str(v).strip()
 
 
 def read_settings(ws):
     settings = {}
     for row in ws.get_all_records():
-        key = normalize(row.get("Parameter", ""))
-        value = normalize(row.get("Value", ""))
-        if key:
-            settings[key] = value
+        k = normalize(row.get("Parameter", ""))
+        v = normalize(row.get("Value", ""))
+        if k:
+            settings[k] = v
     return settings
 
 
@@ -103,14 +109,30 @@ def detect_currency(text):
 def parse_price(value):
     if value is None:
         return None
-    text = str(value).replace(".", "").replace(",", ".")
-    match = re.search(r"(\d+(?:\.\d+)?)", text)
-    if not match:
+
+    text = str(value)
+    text = text.replace("\xa0", " ")
+
+    matches = re.findall(r"[€$£]?\s?\d{2,5}(?:[.,]\d{2})?", text)
+    candidates = []
+
+    for m in matches:
+        cleaned = m.replace("€", "").replace("$", "").replace("£", "").strip()
+        if "," in cleaned and "." in cleaned:
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        elif "," in cleaned:
+            cleaned = cleaned.replace(",", ".")
+        try:
+            val = float(cleaned)
+            if val >= 50:
+                candidates.append(val)
+        except Exception:
+            pass
+
+    if not candidates:
         return None
-    try:
-        return float(match.group(1))
-    except Exception:
-        return None
+
+    return max(candidates)
 
 
 def money(amount, symbol):
@@ -119,8 +141,8 @@ def money(amount, symbol):
     return f"{symbol}{amount:.2f}"
 
 
-def title_is_valid(title, sku):
-    t = f" {str(title).lower()} "
+def title_is_valid(text, sku):
+    t = f" {str(text).lower()} "
     if any(b in t for b in BLOCKED):
         return False
     has_sku = sku.lower() in t
@@ -128,18 +150,9 @@ def title_is_valid(title, sku):
     return has_sku or has_name
 
 
-def parse_shipping(text):
-    if not text or text == "N/D":
-        return None
-    low = str(text).lower()
-    if "free" in low or "gratis" in low or "gratuita" in low:
-        return 0.0
-    return parse_price(text)
-
-
-def serpapi_google(query, max_results, engine="google"):
+def serpapi_google(query, max_results=10):
     params = {
-        "engine": engine,
+        "engine": "google",
         "q": query,
         "api_key": SERPAPI_KEY,
         "gl": "it",
@@ -148,101 +161,65 @@ def serpapi_google(query, max_results, engine="google"):
     }
     r = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
     r.raise_for_status()
-    data = r.json()
-    if engine == "google_shopping":
-        return data.get("shopping_results", [])
-    return data.get("organic_results", [])
+    return r.json().get("organic_results", [])
 
 
-def find_real_product_link(site, sku):
-    query = f'"{site}" "{sku}" "36.5"'
-    try:
-        results = serpapi_google(query, 10, "google")
-    except Exception:
-        return ""
-    for r in results:
-        link = extract_real_link(r.get("link", ""))
-        text = f"{r.get('title','')} {r.get('snippet','')} {link}".lower()
-        if sku.lower() in text or all(x in text for x in ["travis", "scott", "tropical", "pink"]):
-            if "google.com" not in link:
-                return link
-    return ""
-
-
-def verify_page_price_and_size(url, sku):
-    """
-    Best-effort check. Some sites block GitHub requests.
-    Returns: verified_price, currency_symbol, availability_note
-    """
+def verify_page(url, sku):
     if not url or "google.com" in url:
-        return None, None, "Price not verified - Google link"
-
-    blocked_price_domains = [
-        "instagram.com",
-        "facebook.com",
-        "tiktok.com",
-        "youtube.com",
-        "lesitedelasneaker.com",
-        "sneakernews.com",
-        "soleretriever.com",
-        "hypebeast.com",
-        "nicekicks.com",
-        "complex.com",
-    ]
+        return None, "€", "Price not verified - Google link", ""
 
     domain = domain_from_url(url)
-
-    if any(blocked in domain for blocked in blocked_price_domains):
-        return None, None, "Price not verified - non-product page"
+    if any(d in domain for d in NON_PRODUCT_DOMAINS):
+        return None, "€", "Price not verified - non-product page", ""
 
     try:
-        r = requests.get(
-            url,
-            headers={"User-Agent": "Mozilla/5.0"},
-            timeout=20,
-        )
+        r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=20)
         if r.status_code >= 400:
-            return None, None, f"Price not verified - HTTP {r.status_code}"
+            return None, "€", f"Price not verified - HTTP {r.status_code}", ""
 
         html = r.text
         soup = BeautifulSoup(html, "html.parser")
-        text = soup.get_text(" ", strip=True).lower()
+        visible_text = soup.get_text(" ", strip=True)
+        low = visible_text.lower()
 
-        if "36.5" in text or "36,5" in text or "4.5y" in text or "4.5 y" in text:
+        if not title_is_valid(visible_text[:5000], sku):
+            return None, detect_currency(html), "Rejected - product text not confirmed", ""
+
+        if "36.5" in low or "36,5" in low or "4.5y" in low or "4.5 y" in low:
             size_note = "Size likely present"
-        elif "36" in text or "4y" in text or "4 y" in text:
+            size_value = "36.5 / 4.5Y likely"
+        elif "36" in low or "4y" in low or "4 y" in low:
             size_note = "Size 36/4Y likely present"
+            size_value = "36 / 4Y likely"
         else:
             size_note = "Size not verified"
+            size_value = "To verify"
 
         symbol = detect_currency(html)
-
         price_candidates = []
 
-        meta_props = [
+        for attrs in [
             {"property": "product:price:amount"},
             {"property": "og:price:amount"},
             {"itemprop": "price"},
-        ]
-
-        for attrs in meta_props:
+        ]:
             tag = soup.find(attrs=attrs)
             if tag:
-                content = tag.get("content") or tag.get("value")
-                val = parse_price(content)
+                val = parse_price(tag.get("content") or tag.get("value"))
                 if val:
                     price_candidates.append(val)
 
-        scripts = soup.find_all("script", type="application/ld+json")
-        for script in scripts:
+        for script in soup.find_all("script", type="application/ld+json"):
             raw = script.string or script.get_text()
             if not raw:
                 continue
             try:
                 data = json.loads(raw)
-                objects = data if isinstance(data, list) else [data]
-                for obj in objects:
-                    offers = obj.get("offers") if isinstance(obj, dict) else None
+                objs = data if isinstance(data, list) else [data]
+                for obj in objs:
+                    if not isinstance(obj, dict):
+                        continue
+                    offers = obj.get("offers")
                     if isinstance(offers, dict):
                         val = parse_price(offers.get("price"))
                         if val:
@@ -255,35 +232,31 @@ def verify_page_price_and_size(url, sku):
             except Exception:
                 pass
 
-        # Fallback: visible prices like €919,00
-        for m in re.findall(r"[€$£]\s?\d{2,5}(?:[.,]\d{2})?", html):
-            val = parse_price(m)
-            if val:
-                price_candidates.append(val)
+        # fallback prezzi visibili
+        fallback = parse_price(html)
+        if fallback:
+            price_candidates.append(fallback)
 
         if price_candidates:
-            # avoid tiny unrelated values; use highest plausible product price
-            price_candidates = [p for p in price_candidates if p >= 50]
-            if price_candidates:
-                return max(price_candidates), symbol, f"Price verified - {size_note}"
+            return max(price_candidates), symbol, f"Price verified - {size_note}", size_value
 
-        return None, symbol, f"Price not found - {size_note}"
+        return None, symbol, f"Price not found - {size_note}", size_value
 
     except Exception as e:
-        return None, None, f"Price not verified - {str(e)[:60]}"
+        return None, "€", f"Price not verified - {str(e)[:60]}", ""
 
 
 def ensure_headers(ws):
     values = ws.get_all_values()
     if not values:
-        ws.update("A1:M1", [HEADERS])
+        ws.update(values=[HEADERS], range_name="A1:M1")
     else:
-        ws.update("A1:M1", [HEADERS])
+        ws.update(values=[HEADERS], range_name="A1:M1")
 
 
 def clear_results(ws):
     ws.clear()
-    ws.update("A1:M1", [HEADERS])
+    ws.update(values=[HEADERS], range_name="A1:M1")
 
 
 def write_rows(ws, rows):
@@ -292,7 +265,7 @@ def write_rows(ws, rows):
     clean = [[str(c) if c is not None else "" for c in row] for row in rows]
     start = len(ws.get_all_values()) + 1
     end = start + len(clean) - 1
-    ws.update(f"A{start}:M{end}", clean, value_input_option="USER_ENTERED")
+    ws.update(values=clean, range_name=f"A{start}:M{end}", value_input_option="USER_ENTERED")
 
 
 def main():
@@ -306,188 +279,122 @@ def main():
     clear_results(results_ws)
 
     settings = read_settings(settings_ws)
-    source_rows = sources_ws.get_all_records()
-
     sku = settings.get("SKU", "IQ7604-101")
     search_term = settings.get("Search Term", "Travis Scott Tropical Pink")
     alert_2 = float(settings.get("Alert 2", "400"))
-    max_results = int(float(settings.get("Max Results per Site", "20")))
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    allowed_domains = []
-    for row in source_rows:
-        active = normalize(row.get("ATTIVO", "")).upper()
-        enabled = normalize(row.get("Enabled", "")).upper()
-        url = normalize(row.get("URL", ""))
-        if active in ["YES", "SI", "SÌ", "TRUE", "1"] and enabled in ["YES", "SI", "SÌ", "TRUE", "1"]:
-            d = domain_from_url(url)
-            if d:
-                allowed_domains.append(d)
+    source_rows = sources_ws.get_all_records()
+    rows = []
+    alerts = []
+    checked = 0
+    no_result = 0
 
-    queries = [
-        f'"{sku}" "Jordan"',
-        f'"{search_term}"',
-        f'"Travis Scott" "Tropical Pink" "Jordan"',
-    ]
+    for source in source_rows:
+        active = normalize(source.get("ATTIVO", "")).upper()
+        enabled = normalize(source.get("Enabled", "")).upper()
+        site_name = normalize(source.get("SITO", ""))
+        site_url = normalize(source.get("URL", ""))
 
-    items = []
-    filtered_out = 0
+        if active not in ["YES", "SI", "SÌ", "TRUE", "1"]:
+            continue
+        if enabled not in ["YES", "SI", "SÌ", "TRUE", "1"]:
+            continue
 
-    for query in queries:
+        domain = domain_from_url(site_url)
+        if not domain:
+            continue
+
+        checked += 1
+
+        query = f'site:{domain} "{sku}" OR "{search_term}"'
         try:
-            shopping = serpapi_google(query, max_results, "google_shopping")
+            results = serpapi_google(query, 5)
         except Exception as e:
-            shopping = []
-            items.append({
-                "sort_total": 999999,
-                "alert": False,
-                "row": [now, "SYSTEM", sku, "", "", "", "", "", f"Shopping error: {e}", "", "", "SerpAPI", query],
-            })
-
-        for item in shopping:
-            title = item.get("title", "")
-            if not title_is_valid(title, sku):
-                filtered_out += 1
-                continue
-
-            source = item.get("source", "")
-            raw_link = item.get("product_link") or item.get("link") or ""
-            link = extract_real_link(raw_link)
-
-            if "google.com" in link:
-                found = find_real_product_link(source, sku)
-                if found:
-                    link = found
-
-            price_text = item.get("price", "")
-            google_price = item.get("extracted_price") or parse_price(price_text)
-            symbol = detect_currency(price_text)
-
-            shipping_text = item.get("shipping") or item.get("delivery") or "N/D"
-            shipping_value = parse_shipping(shipping_text)
-
-            verified_price, verified_symbol, note = verify_page_price_and_size(link, sku)
-
-            final_price = verified_price if verified_price is not None else google_price
-            final_symbol = verified_symbol or symbol
-
-            total = final_price
-            if final_price is not None and shipping_value is not None:
-                total = final_price + shipping_value
-
-            site = source or domain_from_url(link) or "Google Shopping"
-
-            row = [
-                now,
-                site,
-                sku,
-                "36 / 36.5 / 4Y / 4.5Y / 4 / 4.5",
-                "GS/Adult",
-                money(final_price, final_symbol),
-                money(shipping_value, final_symbol) if shipping_value is not None else "N/D",
-                money(total, final_symbol),
-                note,
-                "",
-                link,
-                "V8 verified",
-                title,
-            ]
-
-            items.append({
-                "sort_total": total if total is not None else 999999,
-                "alert": total is not None and total <= alert_2,
-                "row": row,
-            })
-
-    # Organic discovery, price not verified unless page available
-    try:
-        organic = serpapi_google(f'"{sku}" OR "{search_term}"', max_results, "google")
-    except Exception:
-        organic = []
-
-    for result in organic:
-        title = result.get("title", "")
-        snippet = result.get("snippet", "")
-        link = extract_real_link(result.get("link", ""))
-        domain = domain_from_url(link)
-
-        if allowed_domains and domain not in allowed_domains:
+            rows.append([
+                now, site_name or domain, sku, "", "", "N/D", "N/D", "N/D",
+                f"Search error: {e}", "", site_url, "V9 site search", query
+            ])
             continue
 
-        if not title_is_valid(f"{title} {snippet}", sku):
-            filtered_out += 1
+        best_link = ""
+        best_title = ""
+
+        for result in results:
+            title = result.get("title", "")
+            link = extract_real_link(result.get("link", ""))
+            snippet = result.get("snippet", "")
+            text = f"{title} {snippet} {link}"
+
+            if title_is_valid(text, sku):
+                best_link = link
+                best_title = title
+                break
+
+        if not best_link:
+            no_result += 1
+            rows.append([
+                now, site_name or domain, sku, "To verify", "To verify",
+                "N/D", "N/D", "N/D", "No product page found",
+                "", site_url, "V9 site search", query
+            ])
             continue
 
-        price, symbol, note = verify_page_price_and_size(link, sku)
+        price, symbol, status, size_value = verify_page(best_link, sku)
 
+        total = price
         row = [
             now,
-            domain,
+            site_name or domain,
             sku,
-            "To verify",
-            "To verify",
-            money(price, symbol or "€"),
+            size_value or "To verify",
+            "GS/Adult",
+            money(price, symbol),
             "N/D",
-            money(price, symbol or "€"),
-            note,
+            money(total, symbol),
+            status,
             "",
-            link,
-            "V8 organic verified",
-            title,
+            best_link,
+            "V9 site-by-site",
+            best_title,
         ]
 
-        items.append({
-    "sort_total": total if total is not None else 999999,
-    "row": row,
-    "alert": (
-        total is not None
-        and total <= alert_2
-        and "Price verified" in note
-        and "non-product" not in note
-    ),
-})
+        rows.append(row)
 
-    # Deduplicate
-    unique = []
-    seen = set()
-    for item in items:
-        r = item["row"]
-        key = (str(r[1]).lower(), str(r[10]).lower(), str(r[12]).lower(), str(r[5]).lower())
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(item)
+        if price is not None and price <= alert_2 and status.startswith("Price verified"):
+            alerts.append(row)
 
-    unique.sort(key=lambda x: x["sort_total"])
+    def sort_key(row):
+        val = parse_price(row[7])
+        return val if val is not None else 999999
 
-    rows = [i["row"] for i in unique]
-    alerts = [i for i in unique if i.get("alert")]
+    rows.sort(key=sort_key)
 
     write_rows(results_ws, rows)
     write_rows(history_ws, rows)
 
     summary = (
-        "🔍 Sneaker Tracker V8\n\n"
-        f"Risultati ultimo check: {len(rows)}\n"
-        f"Scartati dal filtro: {filtered_out}\n"
+        "🔍 Sneaker Tracker V9\n\n"
+        f"Siti controllati: {checked}\n"
+        f"Senza pagina prodotto: {no_result}\n"
+        f"Righe salvate: {len(rows)}\n"
         f"Alert ≤ {alert_2} €: {len(alerts)}"
     )
 
     if alerts:
         details = "\n\n".join([
-            f"🚨 {i['row'][1]}\n"
-            f"Price: {i['row'][5]}\n"
-            f"Shipping: {i['row'][6]}\n"
-            f"Total: {i['row'][7]}\n"
-            f"Status: {i['row'][8]}\n"
-            f"Link: {i['row'][10]}\n"
-            f"Titolo: {i['row'][12]}"
-            for i in alerts[:5]
+            f"🚨 {r[1]}\n"
+            f"Price: {r[5]}\n"
+            f"Total: {r[7]}\n"
+            f"Size: {r[3]}\n"
+            f"Status: {r[8]}\n"
+            f"Link: {r[10]}"
+            for r in alerts[:5]
         ])
         send_telegram(summary + "\n\n" + details)
     else:
-        send_telegram(summary + "\n\nNessun alert sotto soglia trovato.")
+        send_telegram(summary + "\n\nNessun alert reale sotto soglia trovato.")
 
 
 if __name__ == "__main__":
