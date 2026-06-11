@@ -239,8 +239,8 @@ def main():
         found_rows.append(row)
 
         if found_rows:
-        print(f"FOUND_ROWS = {len(found_rows)}")
-        print("WRITING TO GOOGLE SHEETS")
+            print(f"FOUND_ROWS = {len(found_rows)}")
+            print("WRITING TO GOOGLE SHEETS")
 
         for row in found_rows:
             print(f"Writing row: {row[1]} - {row[5]} - {row[10]}")
