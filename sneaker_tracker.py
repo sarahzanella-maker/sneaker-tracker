@@ -238,13 +238,18 @@ def main():
 
         found_rows.append(row)
 
-        if found_rows:
-            print(f"FOUND_ROWS = {len(found_rows)}")
-            print("WRITING TO GOOGLE SHEETS")
+            if found_rows:
+        print(f"FOUND_ROWS = {len(found_rows)}")
+        print("WRITING TO GOOGLE SHEETS")
 
+        clean_rows = []
         for row in found_rows:
-            print(f"Writing row: {row[1]} - {row[5]} - {row[10]}")
-            results_ws.append_row(row, value_input_option="USER_ENTERED")
+            clean_rows.append([str(cell) if cell is not None else "" for cell in row])
+
+        results_ws.append_rows(
+            clean_rows,
+            value_input_option="USER_ENTERED"
+        )
 
     summary = (
         "🔍 Sneaker Tracker V5\n\n"
