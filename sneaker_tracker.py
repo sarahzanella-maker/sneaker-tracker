@@ -360,6 +360,30 @@ def main():
 
         found_rows.append(row)
 
+    unique_rows = []
+    seen = set()
+
+    for row in found_rows:
+        key = (
+            str(row[1]).lower().strip(),   # site
+            str(row[5]).lower().strip(),   # price
+            str(row[12]).lower().strip(),  # title
+        )
+
+        if key in seen:
+            continue
+
+        seen.add(key)
+        unique_rows.append(row)
+
+    found_rows = unique_rows
+
+    alert_rows = [
+        row for row in found_rows
+        if str(row[5]).replace(".", "", 1).isdigit()
+        and float(row[5]) <= alert_2
+    ] 
+    
     print(f"FOUND_ROWS = {len(found_rows)}")
     print(f"FILTERED_OUT = {filtered_out}")
     print("WRITING TO GOOGLE SHEETS")
