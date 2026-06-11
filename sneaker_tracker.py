@@ -20,7 +20,7 @@ SETTINGS_SHEET = "Settings"
 SOURCES_SHEET = "Sources"
 RESULTS_SHEET = "Results"
 
-RESULT_HEADERS = ["Rank", "Site", "Price", "Size", "Status", "URL", "Last Check"]
+RESULT_HEADERS = ["Rank", "Site", "Trust", "Price", "Size", "Status", "URL", "Last Check"]
 
 BLOCKED_TERMS = [
     "iq7605-101", "preschool", "(ps)", " ps ", "toddler", "(td)", " td ",
@@ -41,6 +41,40 @@ NON_PRODUCT_DOMAINS = [
     "sneakernews.com", "hypebeast.com", "nicekicks.com",
     "complex.com", "lesitedelasneaker.com"
 ]
+
+TRUST_MAP = {
+    "stockx": "A",
+    "goat": "A",
+    "klekt": "A",
+    "novelship": "A",
+    "stadium goods": "A",
+    "stadiumgoods": "A",
+    "wethenew": "A",
+    "flight club": "A",
+    "flightclub": "A",
+
+    "hypeboost": "B",
+    "overkicks": "B",
+    "over kicks": "B",
+    "kis": "B",
+    "menta": "B",
+    "select": "B",
+    "outgem": "B",
+
+    "whiteturin": "C",
+    "white turin": "C",
+    "request": "C",
+    "mrreseller": "C",
+    "mr reseller": "C",
+    "sutore": "C",
+    "zneakerz": "C",
+    "lab19": "C",
+    "laced": "C",
+
+    "subito": "D",
+}
+
+DEFAULT_TRUST = "?"
 
 
 def send_telegram(message):
@@ -192,6 +226,16 @@ def money(amount, symbol):
     return f"{symbol}{amount:.2f}"
 
 
+def get_trust(site):
+    value = str(site).lower().strip()
+
+    for key, trust in TRUST_MAP.items():
+        if key in value:
+            return trust
+
+    return DEFAULT_TRUST
+
+
 def title_is_valid(text, sku):
     text = f" {str(text).lower()} "
 
@@ -334,6 +378,33 @@ def extract_structured_price(soup):
     return min(prices)
 
 
+def extract_visible_price(text):
+    # Best-effort fallback for shops that do not expose JSON-LD/meta prices.
+    # Only prices with explicit currency symbols/codes are accepted.
+    patterns = [
+        r"€\s?(\d{2,5}(?:[.,]\d{2})?)",
+        r"EUR\s?(\d{2,5}(?:[.,]\d{2})?)",
+        r"(\d{2,5}(?:[.,]\d{2})?)\s?€",
+        r"\$\s?(\d{2,5}(?:[.,]\d{2})?)",
+        r"USD\s?(\d{2,5}(?:[.,]\d{2})?)",
+        r"£\s?(\d{2,5}(?:[.,]\d{2})?)",
+        r"GBP\s?(\d{2,5}(?:[.,]\d{2})?)",
+    ]
+
+    prices = []
+
+    for pattern in patterns:
+        for match in re.findall(pattern, str(text), flags=re.IGNORECASE):
+            value = parse_price(match)
+            if value is not None:
+                prices.append(value)
+
+    if not prices:
+        return None
+
+    return min(prices)
+
+
 def verify_product_page(url, sku, target_sizes, trust_product_url=False):
     if not url:
         return None, "€", "No URL", "To verify"
@@ -362,12 +433,18 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
 
         symbol = detect_currency(html)
         price = extract_structured_price(soup)
+        price_source = "structured"
+
+        if price is None:
+            price = extract_visible_price(text)
+            price_source = "visible"
+
         size = size_status(text, target_sizes)
 
         if price is not None:
-            return price, symbol, "Price verified", size
+            return price, symbol, f"Price verified ({price_source})", size
 
-        return None, symbol, "Price not found structured", size
+        return None, symbol, "Price not found", size
 
     except Exception as error:
         return None, "€", f"Not verified - {str(error)[:60]}", "To verify"
@@ -375,7 +452,7 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
 
 def clear_results(ws):
     ws.clear()
-    ws.update(values=[RESULT_HEADERS], range_name="A1:G1")
+    ws.update(values=[RESULT_HEADERS], range_name="A1:H1")
 
 
 def write_results(ws, rows):
@@ -391,7 +468,7 @@ def write_results(ws, rows):
 
     ws.update(
         values=clean_rows,
-        range_name=f"A2:G{end_row}",
+        range_name=f"A2:H{end_row}",
         value_input_option="USER_ENTERED",
     )
 
@@ -462,6 +539,7 @@ def main():
             row = [
                 "",
                 site or domain_from_url(domain_url),
+                get_trust(site or domain_from_url(domain_url)),
                 "N/D",
                 "To verify",
                 status,
@@ -479,7 +557,7 @@ def main():
             trust_product_url=trust_product_url,
         )
 
-        if price is not None and status == "Price verified":
+        if price is not None and status.startswith("Price verified"):
             verified_count += 1
         else:
             manual_check.append(site or domain_from_url(domain_url))
@@ -489,6 +567,7 @@ def main():
             "row": [
                 "",
                 site or domain_from_url(domain_url),
+                get_trust(site or domain_from_url(domain_url)),
                 money(price, symbol),
                 size,
                 status,
@@ -525,7 +604,7 @@ def main():
     ]
 
     summary = (
-        "📊 Sneaker Tracker V11.2\n\n"
+        "📊 Sneaker Tracker V11.3\n\n"
         f"Siti controllati: {checked}\n"
         f"Product URL usati: {product_url_count}\n"
         f"Trovati via Google: {google_found_count}\n"
@@ -537,16 +616,16 @@ def main():
 
         details = (
             f"\n🥇 Miglior prezzo verificato\n"
-            f"{best[1]} → {best[2]}\n"
-            f"Size: {best[3]}\n"
-            f"Status: {best[4]}\n"
-            f"Link: {best[5]}"
+            f"{best[1]} [{best[2]}] → {best[3]}\n"
+            f"Size: {best[4]}\n"
+            f"Status: {best[5]}\n"
+            f"Link: {best[6]}"
         )
 
         others = []
         for item in verified_rows[1:telegram_top]:
             row = item["row"]
-            others.append(f"{row[1]} → {row[2]}")
+            others.append(f"{row[1]} [{row[2]}] → {row[3]}")
 
         if others:
             details += "\n\n📋 Altri prezzi verificati\n" + "\n".join(others)
