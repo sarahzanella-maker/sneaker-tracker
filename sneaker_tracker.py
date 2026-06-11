@@ -18,9 +18,15 @@ SOURCE_SHEET_NAME = "Sneaker Sources"
 SETTINGS_SHEET_NAME = "Settings"
 RESULTS_SHEET_NAME = "Results"
 
-HEADERS = [
+RESULT_HEADERS = [
     "Rank", "Date", "Site", "SKU", "Size", "Type", "Price", "Shipping", "Total",
     "Availability", "Stock", "URL", "Source Type", "Notes"
+]
+
+REQUIRED_SOURCE_COLUMNS = [
+    "SITO", "URL", "ATTIVO", "Reliability", "Notes", "Search Query",
+    "Search Mode", "Search Type", "Search Priority", "Enabled",
+    "Source Origin", "First Seen"
 ]
 
 BLOCKED = [
@@ -35,7 +41,7 @@ BLOCKED = [
 NON_PRODUCT_DOMAINS = [
     "instagram.com", "facebook.com", "tiktok.com", "youtube.com",
     "lesitedelasneaker.com", "sneakernews.com", "soleretriever.com",
-    "hypebeast.com", "nicekicks.com", "complex.com"
+    "hypebeast.com", "nicekicks.com", "complex.com", "google.com"
 ]
 
 NON_PRODUCT_PATHS = [
@@ -64,6 +70,14 @@ def connect_sheet():
 
 def normalize(v):
     return str(v).strip()
+
+
+def col_letter(n):
+    result = ""
+    while n:
+        n, rem = divmod(n - 1, 26)
+        result = chr(65 + rem) + result
+    return result
 
 
 def read_settings(ws):
@@ -167,6 +181,8 @@ def is_non_product_url(url):
     domain = domain_from_url(url)
     path = path_from_url(url)
 
+    if not domain:
+        return True
     if any(d in domain for d in NON_PRODUCT_DOMAINS):
         return True
     if any(p in path for p in NON_PRODUCT_PATHS):
@@ -288,7 +304,7 @@ def verify_page(url, sku):
 
 def clear_results(ws):
     ws.clear()
-    ws.update(values=[HEADERS], range_name="A1:N1")
+    ws.update(values=[RESULT_HEADERS], range_name="A1:N1")
 
 
 def write_rows(ws, rows):
@@ -310,6 +326,94 @@ def write_rows(ws, rows):
     )
 
 
+def ensure_source_columns(ws):
+    values = ws.get_all_values()
+    headers = values[0] if values else []
+
+    changed = False
+    for col in REQUIRED_SOURCE_COLUMNS:
+        if col not in headers:
+            headers.append(col)
+            changed = True
+
+    if changed or not values:
+        end_col = col_letter(len(headers))
+        ws.update(values=[headers], range_name=f"A1:{end_col}1")
+
+    return headers
+
+
+def append_discovered_source(ws, headers, domain, first_seen):
+    site_name = domain.split(".")[0].replace("-", " ").title()
+    base_url = f"https://{domain}"
+
+    row_data = {
+        "SITO": site_name,
+        "URL": base_url,
+        "ATTIVO": "NO",
+        "Reliability": "",
+        "Notes": "Auto-discovered by tracker. Review manually before enabling.",
+        "Search Query": "IQ7604-101",
+        "Search Mode": "GOOGLE_SITE_SEARCH",
+        "Search Type": "SEARCH",
+        "Search Priority": "LOW",
+        "Enabled": "FALSE",
+        "Source Origin": "Auto-discovered",
+        "First Seen": first_seen,
+    }
+
+    row = [row_data.get(h, "") for h in headers]
+    ws.append_row(row, value_input_option="USER_ENTERED")
+
+
+def discover_new_sources(sources_ws, headers, existing_domains, sku, search_term, today):
+    discovered = []
+
+    queries = [
+        f'"{sku}"',
+        f'"{search_term}" "IQ7604-101"',
+        f'"Travis Scott" "Tropical Pink" "36.5"',
+    ]
+
+    for query in queries:
+        try:
+            results = serpapi_google(query, 10)
+        except Exception:
+            continue
+
+        for result in results:
+            title = result.get("title", "")
+            link = extract_real_link(result.get("link", ""))
+            snippet = result.get("snippet", "")
+
+            if is_non_product_url(link):
+                continue
+
+            text = f"{title} {snippet} {link}"
+
+            if not title_is_valid(text, sku):
+                continue
+
+            domain = domain_from_url(link)
+
+            if not domain:
+                continue
+
+            if domain in existing_domains:
+                continue
+
+            existing_domains.add(domain)
+            append_discovered_source(sources_ws, headers, domain, today)
+
+            discovered.append({
+                "domain": domain,
+                "url": f"https://{domain}",
+                "title": title,
+            })
+
+    return discovered
+
+
 def main():
     sheet = connect_sheet()
 
@@ -317,6 +421,7 @@ def main():
     settings_ws = sheet.worksheet(SETTINGS_SHEET_NAME)
     results_ws = sheet.worksheet(RESULTS_SHEET_NAME)
 
+    source_headers = ensure_source_columns(sources_ws)
     clear_results(results_ws)
 
     settings = read_settings(settings_ws)
@@ -325,12 +430,21 @@ def main():
     search_term = settings.get("Search Term", "Travis Scott Tropical Pink")
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    today = datetime.now().strftime("%Y-%m-%d")
+
     source_rows = sources_ws.get_all_records()
 
     raw_rows = []
     checked = 0
     no_result = 0
     verified_count = 0
+    existing_domains = set()
+
+    for source in source_rows:
+        site_url = normalize(source.get("URL", ""))
+        domain = domain_from_url(site_url)
+        if domain:
+            existing_domains.add(domain)
 
     for source in source_rows:
         active = normalize(source.get("ATTIVO", "")).upper()
@@ -344,7 +458,6 @@ def main():
             continue
 
         domain = domain_from_url(site_url)
-
         if not domain:
             continue
 
@@ -360,7 +473,7 @@ def main():
                 "verified": False,
                 "row": [
                     "", now, site_name or domain, sku, "", "", "N/D", "N/D", "N/D",
-                    f"Search error: {e}", "", site_url, "V10 site search", query,
+                    f"Search error: {e}", "", site_url, "V10.1 site search", query,
                 ],
             })
             continue
@@ -390,7 +503,7 @@ def main():
                 "row": [
                     "", now, site_name or domain, sku, "To verify", "To verify",
                     "N/D", "N/D", "N/D", "No product page found",
-                    "", site_url, "V10 site search", query,
+                    "", site_url, "V10.1 site search", query,
                 ],
             })
             continue
@@ -408,7 +521,7 @@ def main():
             "row": [
                 "", now, site_name or domain, sku, size_value or "To verify", "GS/Adult",
                 money(price, symbol), "N/D", money(total, symbol),
-                status, "", best_link, "V10 site-by-site", best_title,
+                status, "", best_link, "V10.1 site-by-site", best_title,
             ],
         })
 
@@ -432,11 +545,21 @@ def main():
 
     verified_rows = [i for i in raw_rows if i["verified"]]
 
+    new_sources = discover_new_sources(
+        sources_ws=sources_ws,
+        headers=source_headers,
+        existing_domains=existing_domains,
+        sku=sku,
+        search_term=search_term,
+        today=today,
+    )
+
     summary = (
-        "📊 Sneaker Tracker V10\n\n"
+        "📊 Sneaker Tracker V10.1\n\n"
         f"Siti controllati: {checked}\n"
         f"Senza pagina prodotto: {no_result}\n"
         f"Prezzi verificati: {verified_count}\n"
+        f"Nuovi siti trovati: {len(new_sources)}\n"
     )
 
     if verified_rows:
@@ -459,9 +582,21 @@ def main():
         if other_lines:
             details += "\n\n📋 Altri prezzi verificati\n" + "\n".join(other_lines)
 
-        send_telegram(summary + details)
     else:
-        send_telegram(summary + "\nNessun prezzo verificato trovato oggi.")
+        details = "\nNessun prezzo verificato trovato oggi."
+
+    if new_sources:
+        new_lines = []
+        for s in new_sources[:10]:
+            new_lines.append(f"🆕 {s['domain']}\n{s['url']}")
+
+        details += (
+            "\n\n🆕 Nuovi siti aggiunti a Sneaker Sources "
+            "(ATTIVO=NO, Enabled=FALSE)\n\n"
+            + "\n\n".join(new_lines)
+        )
+
+    send_telegram(summary + details)
 
 
 if __name__ == "__main__":
