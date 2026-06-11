@@ -438,10 +438,15 @@ def main():
         ]
 
         items.append({
-            "sort_total": price if price is not None else 999999,
-            "alert": total is not None and total <= alert_2 and "Price verified" in note and "non-product" not in note
-            "row": row,
-        })
+    "sort_total": total if total is not None else 999999,
+    "row": row,
+    "alert": (
+        total is not None
+        and total <= alert_2
+        and "Price verified" in note
+        and "non-product" not in note
+    ),
+})
 
     # Deduplicate
     unique = []
