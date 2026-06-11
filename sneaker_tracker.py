@@ -20,6 +20,35 @@ SETTINGS_SHEET_NAME = "Settings"
 RESULTS_SHEET_NAME = "Results"
 
 
+REQUIRED_KEYWORDS = [
+    "tropical pink",
+    "pink pack",
+    "iq7604-101",
+]
+
+BLOCKED_KEYWORDS = [
+    "iq7605-101",
+    "preschool",
+    " ps ",
+    "toddler",
+    " td ",
+    "infant",
+    "kids",
+    "baby",
+    "olive",
+    "medium olive",
+    "black olive",
+    "reverse mocha",
+    "canary",
+    "velvet brown",
+    "fragment",
+    "phantom",
+    "air force",
+    "dunk",
+    "air max",
+]
+
+
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=30)
@@ -27,12 +56,10 @@ def send_telegram(message):
 
 def connect_sheet():
     credentials_dict = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-
     credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
     client = gspread.authorize(credentials)
     return client.open_by_key(GOOGLE_SHEET_ID)
@@ -79,21 +106,13 @@ def parse_price(value):
         return None
 
 
-def is_excluded(text, exclude_sku):
-    text = text.lower()
+def passes_quality_filter(text):
+    text = f" {text.lower()} "
 
-    blocked_terms = [
-        exclude_sku.lower(),
-        "preschool",
-        " ps ",
-        " toddler",
-        " td ",
-        " infant",
-        "kids",
-        "baby",
-    ]
+    has_required = any(keyword in text for keyword in REQUIRED_KEYWORDS)
+    has_blocked = any(keyword in text for keyword in BLOCKED_KEYWORDS)
 
-    return any(term in text for term in blocked_terms if term.strip())
+    return has_required and not has_blocked
 
 
 def serpapi_shopping_search(query, max_results):
@@ -160,7 +179,6 @@ def main():
     source_rows = sources_ws.get_all_records()
 
     sku = settings.get("SKU", "IQ7604-101")
-    exclude_sku = settings.get("Exclude SKU", "IQ7605-101")
     search_term = settings.get("Search Term", "Travis Scott Tropical Pink")
     alert_2 = float(settings.get("Alert 2", "400"))
     max_results = int(float(settings.get("Max Results per Site", "20")))
@@ -181,11 +199,13 @@ def main():
 
     queries = [
         f'"{sku}"',
-        f'"{search_term}" "4Y" OR "4.5Y" OR "36" OR "36.5"',
+        f'"{search_term}" "tropical pink"',
+        f'"Jordan 1 Low" "Travis Scott" "Tropical Pink"',
     ]
 
     found_rows = []
     alert_rows = []
+    rejected_count = 0
 
     for query in queries:
         try:
@@ -217,10 +237,8 @@ def main():
 
             full_text = f"{title} {source} {link}"
 
-            if is_excluded(full_text, exclude_sku):
-                continue
-
-            if sku.lower() not in full_text.lower() and search_term.lower() not in full_text.lower():
+            if not passes_quality_filter(full_text):
+                rejected_count += 1
                 continue
 
             site = source or domain_from_url(link) or "Google Shopping"
@@ -234,7 +252,7 @@ def main():
                 price if price is not None else "",
                 "",
                 price if price is not None else "",
-                "Possible match",
+                "Possible match - filtered",
                 "",
                 link,
                 "Google Shopping",
@@ -247,7 +265,10 @@ def main():
                 alert_rows.append(row)
 
     try:
-        organic_results = serpapi_google_search(f'"{sku}" OR "{search_term}"', max_results)
+        organic_results = serpapi_google_search(
+            f'"{sku}" OR "{search_term}" "Tropical Pink"',
+            max_results,
+        )
     except Exception as error:
         organic_results = []
         found_rows.append([
@@ -274,10 +295,11 @@ def main():
 
         full_text = f"{title} {snippet} {link}"
 
-        if is_excluded(full_text, exclude_sku):
+        if allowed_domains and domain not in allowed_domains:
             continue
 
-        if allowed_domains and domain not in allowed_domains:
+        if not passes_quality_filter(full_text):
+            rejected_count += 1
             continue
 
         row = [
@@ -289,7 +311,7 @@ def main():
             "",
             "",
             "",
-            "Found page - price to verify",
+            "Found page - filtered",
             "",
             link,
             "Google Search",
@@ -299,13 +321,15 @@ def main():
         found_rows.append(row)
 
     print(f"FOUND_ROWS = {len(found_rows)}")
+    print(f"REJECTED_ROWS = {rejected_count}")
     print("WRITING TO GOOGLE SHEETS")
 
     write_rows_to_results(results_ws, found_rows)
 
     summary = (
-        "🔍 Sneaker Tracker V5\n\n"
-        f"Risultati trovati: {len(found_rows)}\n"
+        "🔍 Sneaker Tracker V6\n\n"
+        f"Risultati validi: {len(found_rows)}\n"
+        f"Scartati dal filtro: {rejected_count}\n"
         f"Possibili alert ≤ {alert_2} €: {len(alert_rows)}"
     )
 
@@ -313,13 +337,13 @@ def main():
         first_alerts = alert_rows[:5]
 
         details = "\n\n".join([
-            f"🚨 {row[1]}\nPrezzo: {row[5]} €\nLink: {row[10]}"
+            f"🚨 {row[1]}\nPrezzo: {row[5]} €\nLink: {row[10]}\nTitolo: {row[12]}"
             for row in first_alerts
         ])
 
         send_telegram(summary + "\n\n" + details)
     else:
-        send_telegram(summary + "\n\nNessun prezzo sotto soglia trovato per ora.")
+        send_telegram(summary + "\n\nNessun risultato sotto soglia trovato per ora.")
 
 
 if __name__ == "__main__":
