@@ -440,7 +440,9 @@ def main():
             ],
         })
 
-    raw_results.sort(key=lambda x: x["price"])
+    raw_results.sort(
+    key=lambda x: x["price"] if x["price"] is not None else 999999
+)
 
     final_rows = []
     rank = 1
