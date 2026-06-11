@@ -177,7 +177,7 @@ def verify_page_price_and_size(url, sku):
     if not url or "google.com" in url:
         return None, None, "Price not verified - Google link"
 
-        blocked_price_domains = [
+    blocked_price_domains = [
         "instagram.com",
         "facebook.com",
         "tiktok.com",
