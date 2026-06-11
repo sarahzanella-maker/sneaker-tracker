@@ -19,7 +19,7 @@ SETTINGS_SHEET_NAME = "Settings"
 RESULTS_SHEET_NAME = "Results"
 
 HEADERS = [
-    "Date", "Site", "SKU", "Size", "Type", "Price", "Shipping", "Total",
+    "Rank", "Date", "Site", "SKU", "Size", "Type", "Price", "Shipping", "Total",
     "Availability", "Stock", "URL", "Source Type", "Notes"
 ]
 
@@ -93,20 +93,16 @@ def path_from_url(url):
 def extract_real_link(link):
     if not link:
         return ""
-
     link = str(link)
-
     if "google.com" not in link:
         return link
 
     params = parse_qs(urlparse(link).query)
-
     for key in ["url", "q"]:
         if key in params and params[key]:
             candidate = unquote(params[key][0])
             if candidate.startswith("http") and "google.com" not in candidate:
                 return candidate
-
     return link
 
 
@@ -140,7 +136,6 @@ def parse_price(value):
         text = text.replace(",", ".")
 
     match = re.search(r"\d+(?:\.\d+)?", text)
-
     if not match:
         return None
 
@@ -161,13 +156,10 @@ def money(amount, symbol):
 
 def title_is_valid(text, sku):
     t = f" {str(text).lower()} "
-
     if any(b in t for b in BLOCKED):
         return False
-
     has_sku = sku.lower() in t
     has_name = all(x in t for x in ["travis", "scott", "tropical", "pink"])
-
     return has_sku or has_name
 
 
@@ -177,10 +169,8 @@ def is_non_product_url(url):
 
     if any(d in domain for d in NON_PRODUCT_DOMAINS):
         return True
-
     if any(p in path for p in NON_PRODUCT_PATHS):
         return True
-
     return False
 
 
@@ -193,10 +183,8 @@ def serpapi_google(query, max_results=10):
         "hl": "it",
         "num": max_results,
     }
-
     r = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
     r.raise_for_status()
-
     return r.json().get("organic_results", [])
 
 
@@ -217,7 +205,6 @@ def extract_structured_price(soup):
 
     for script in soup.find_all("script", type="application/ld+json"):
         raw = script.string or script.get_text()
-
         if not raw:
             continue
 
@@ -301,7 +288,7 @@ def verify_page(url, sku):
 
 def clear_results(ws):
     ws.clear()
-    ws.update(values=[HEADERS], range_name="A1:M1")
+    ws.update(values=[HEADERS], range_name="A1:N1")
 
 
 def write_rows(ws, rows):
@@ -318,7 +305,7 @@ def write_rows(ws, rows):
 
     ws.update(
         values=clean,
-        range_name=f"A{start}:M{end}",
+        range_name=f"A{start}:N{end}",
         value_input_option="USER_ENTERED",
     )
 
@@ -336,15 +323,14 @@ def main():
 
     sku = settings.get("SKU", "IQ7604-101")
     search_term = settings.get("Search Term", "Travis Scott Tropical Pink")
-    alert_2 = float(settings.get("Alert 2", "400"))
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     source_rows = sources_ws.get_all_records()
 
-    rows = []
-    alerts = []
+    raw_rows = []
     checked = 0
     no_result = 0
+    verified_count = 0
 
     for source in source_rows:
         active = normalize(source.get("ATTIVO", "")).upper()
@@ -354,7 +340,6 @@ def main():
 
         if active not in ["YES", "SI", "SÌ", "TRUE", "1"]:
             continue
-
         if enabled not in ["YES", "SI", "SÌ", "TRUE", "1"]:
             continue
 
@@ -370,21 +355,14 @@ def main():
         try:
             results = serpapi_google(query, 5)
         except Exception as e:
-            rows.append([
-                now,
-                site_name or domain,
-                sku,
-                "",
-                "",
-                "N/D",
-                "N/D",
-                "N/D",
-                f"Search error: {e}",
-                "",
-                site_url,
-                "V9.2 site search",
-                query,
-            ])
+            raw_rows.append({
+                "sort": 999999,
+                "verified": False,
+                "row": [
+                    "", now, site_name or domain, sku, "", "", "N/D", "N/D", "N/D",
+                    f"Search error: {e}", "", site_url, "V10 site search", query,
+                ],
+            })
             continue
 
         best_link = ""
@@ -406,82 +384,84 @@ def main():
 
         if not best_link:
             no_result += 1
-            rows.append([
-                now,
-                site_name or domain,
-                sku,
-                "To verify",
-                "To verify",
-                "N/D",
-                "N/D",
-                "N/D",
-                "No product page found",
-                "",
-                site_url,
-                "V9.2 site search",
-                query,
-            ])
+            raw_rows.append({
+                "sort": 999999,
+                "verified": False,
+                "row": [
+                    "", now, site_name or domain, sku, "To verify", "To verify",
+                    "N/D", "N/D", "N/D", "No product page found",
+                    "", site_url, "V10 site search", query,
+                ],
+            })
             continue
 
         price, symbol, status, size_value = verify_page(best_link, sku)
-
         total = price
 
-        row = [
-            now,
-            site_name or domain,
-            sku,
-            size_value or "To verify",
-            "GS/Adult",
-            money(price, symbol),
-            "N/D",
-            money(total, symbol),
-            status,
-            "",
-            best_link,
-            "V9.2 site-by-site",
-            best_title,
-        ]
+        verified = price is not None and status.startswith("Price verified structured")
+        if verified:
+            verified_count += 1
 
-        rows.append(row)
+        raw_rows.append({
+            "sort": total if total is not None else 999999,
+            "verified": verified,
+            "row": [
+                "", now, site_name or domain, sku, size_value or "To verify", "GS/Adult",
+                money(price, symbol), "N/D", money(total, symbol),
+                status, "", best_link, "V10 site-by-site", best_title,
+            ],
+        })
 
-        if (
-            price is not None
-            and price <= alert_2
-            and status.startswith("Price verified structured")
-            and "Size not verified" not in status
-        ):
-            alerts.append(row)
+    raw_rows.sort(key=lambda x: x["sort"])
 
-    def sort_key(row):
-        val = parse_price(row[7])
-        return val if val is not None else 999999
+    ranked_rows = []
+    rank = 1
 
-    rows.sort(key=sort_key)
+    for item in raw_rows:
+        row = item["row"]
 
-    write_rows(results_ws, rows)
+        if item["verified"]:
+            row[0] = rank
+            rank += 1
+        else:
+            row[0] = ""
+
+        ranked_rows.append(row)
+
+    write_rows(results_ws, ranked_rows)
+
+    verified_rows = [i for i in raw_rows if i["verified"]]
 
     summary = (
-        "🔍 Sneaker Tracker V9.2\n\n"
+        "📊 Sneaker Tracker V10\n\n"
         f"Siti controllati: {checked}\n"
         f"Senza pagina prodotto: {no_result}\n"
-        f"Righe salvate: {len(rows)}\n"
-        f"Alert ≤ {alert_2} €: {len(alerts)}"
+        f"Prezzi verificati: {verified_count}\n"
     )
 
-    if alerts:
-        details = "\n\n".join([
-            f"🚨 {r[1]}\n"
-            f"Price: {r[5]}\n"
-            f"Total: {r[7]}\n"
-            f"Size: {r[3]}\n"
-            f"Status: {r[8]}\n"
-            f"Link: {r[10]}"
-            for r in alerts[:5]
-        ])
-        send_telegram(summary + "\n\n" + details)
+    if verified_rows:
+        best = verified_rows[0]["row"]
+
+        other_lines = []
+        for item in verified_rows[1:6]:
+            r = item["row"]
+            other_lines.append(f"{r[2]} → {r[8]}")
+
+        details = (
+            f"\n🥇 Miglior prezzo verificato\n"
+            f"{best[2]} → {best[8]}\n"
+            f"Price: {best[6]}\n"
+            f"Size: {best[4]}\n"
+            f"Status: {best[9]}\n"
+            f"Link: {best[11]}"
+        )
+
+        if other_lines:
+            details += "\n\n📋 Altri prezzi verificati\n" + "\n".join(other_lines)
+
+        send_telegram(summary + details)
     else:
-        send_telegram(summary + "\n\nNessun alert reale sotto soglia trovato.")
+        send_telegram(summary + "\nNessun prezzo verificato trovato oggi.")
 
 
 if __name__ == "__main__":
