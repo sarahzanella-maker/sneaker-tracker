@@ -399,7 +399,7 @@ def _price_matches_with_positions(text):
         for match in re.finditer(pattern, str(text), flags=re.IGNORECASE):
             raw_value = match.group(1)
             value = _parse_visible_amount(raw_value)
-            if value is not None and 80 <= value <= 3000:
+            if value is not None and 350 <= value <= 3000:
                 prices.append({
                     "value": value,
                     "start": match.start(),
