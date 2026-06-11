@@ -378,9 +378,11 @@ def extract_structured_price(soup):
     return min(prices)
 
 
-def extract_visible_price(text):
-    # Best-effort fallback for shops that do not expose JSON-LD/meta prices.
-    # Only prices with explicit currency symbols/codes are accepted.
+def _parse_visible_amount(value):
+    return parse_price(value)
+
+
+def _price_matches_with_positions(text):
     patterns = [
         r"€\s?(\d{2,5}(?:[.,]\d{2})?)",
         r"EUR\s?(\d{2,5}(?:[.,]\d{2})?)",
@@ -394,15 +396,99 @@ def extract_visible_price(text):
     prices = []
 
     for pattern in patterns:
-        for match in re.findall(pattern, str(text), flags=re.IGNORECASE):
-            value = parse_price(match)
-            if value is not None and 300 <= value <= 3000:
-                prices.append(value)
+        for match in re.finditer(pattern, str(text), flags=re.IGNORECASE):
+            raw_value = match.group(1)
+            value = _parse_visible_amount(raw_value)
+            if value is not None and 80 <= value <= 3000:
+                prices.append({
+                    "value": value,
+                    "start": match.start(),
+                    "end": match.end(),
+                    "raw": match.group(0),
+                })
 
+    return prices
+
+
+def _size_variants(target_sizes):
+    variants = []
+
+    for size in target_sizes:
+        s = str(size).strip().lower()
+        if not s:
+            continue
+
+        clean = s.replace(",", ".")
+        variants.append(clean)
+
+        if clean == "36.5":
+            variants.extend(["36,5", "eu 36.5", "eu 36,5", "taglia 36.5", "taglia 36,5"])
+        elif clean == "36":
+            variants.extend(["eu 36", "taglia 36"])
+        elif clean == "4y":
+            variants.extend(["4 y", "us 4y", "us 4 y"])
+        elif clean == "4.5y":
+            variants.extend(["4.5 y", "us 4.5y", "us 4.5 y", "4,5y", "4,5 y"])
+
+    # Prefer longer variants first so 36.5 wins over 36 when both overlap.
+    unique = sorted(set(variants), key=len, reverse=True)
+    return unique
+
+
+def extract_visible_price_for_sizes(text, target_sizes):
+    """
+    Fallback for pages where prices are visible but not exposed as structured data.
+    It only accepts prices close to target sizes, avoiding the old mistake of taking
+    the cheapest price from another size on the same product page.
+    """
+    raw_text = str(text)
+    normalized = raw_text.lower().replace(",", ".")
+
+    prices = _price_matches_with_positions(raw_text)
     if not prices:
         return None
 
-    return min(prices)
+    size_hits = []
+    for variant in _size_variants(target_sizes):
+        v = variant.lower().replace(",", ".")
+        if not v:
+            continue
+
+        # Avoid matching 36 inside 36.5 or 136 by using loose numeric boundaries.
+        if re.fullmatch(r"\d+(?:\.\d+)?", v):
+            pattern = rf"(?<![\d.]){re.escape(v)}(?![\d.])"
+        else:
+            pattern = re.escape(v)
+
+        for match in re.finditer(pattern, normalized):
+            size_hits.append({
+                "variant": variant,
+                "start": match.start(),
+                "end": match.end(),
+            })
+
+    if not size_hits:
+        return None
+
+    candidates = []
+
+    for size_hit in size_hits:
+        for price in prices:
+            distance_after = price["start"] - size_hit["end"]
+            distance_before = size_hit["start"] - price["end"]
+
+            # Most shop grids show: SIZE then PRICE. Prioritize prices shortly after the size.
+            if 0 <= distance_after <= 120:
+                candidates.append((0, distance_after, price["value"]))
+            # Some layouts show: PRICE then SIZE. Accept only if very close.
+            elif 0 <= distance_before <= 60:
+                candidates.append((1, distance_before, price["value"]))
+
+    if not candidates:
+        return None
+
+    candidates.sort(key=lambda x: (x[0], x[1], x[2]))
+    return candidates[0][2]
 
 
 def verify_product_page(url, sku, target_sizes, trust_product_url=False):
@@ -436,8 +522,8 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
         price_source = "structured"
 
         if price is None:
-            price = extract_visible_price(text)
-            price_source = "visible"
+            price = extract_visible_price_for_sizes(text, target_sizes)
+            price_source = "visible-size"
 
         size = size_status(text, target_sizes)
 
@@ -604,7 +690,7 @@ def main():
     ]
 
     summary = (
-        "📊 Sneaker Tracker V11.3\n\n"
+        "📊 Sneaker Tracker V11.4\n\n"
         f"Siti controllati: {checked}\n"
         f"Product URL usati: {product_url_count}\n"
         f"Trovati via Google: {google_found_count}\n"
