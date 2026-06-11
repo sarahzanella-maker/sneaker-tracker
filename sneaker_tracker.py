@@ -450,7 +450,7 @@ def main():
     for item in raw_results:
         row = item["row"]
 
-        if item["price"] != 999999:
+        if isinstance(item["price"], (int, float)) and item["price"] < 999999:
             row[0] = rank
             rank += 1
         else:
@@ -460,7 +460,13 @@ def main():
 
     write_results(results_ws, final_rows)
 
-    verified_rows = [item for item in raw_results if item["price"] != 999999]
+    verified_rows = [
+    item
+    for item in raw_results
+    if isinstance(item["price"], (int, float))
+    and item["price"] > 0
+    and item["price"] < 999999
+]
 
     summary = (
         "📊 Sneaker Tracker V11\n\n"
