@@ -177,6 +177,24 @@ def verify_page_price_and_size(url, sku):
     if not url or "google.com" in url:
         return None, None, "Price not verified - Google link"
 
+        blocked_price_domains = [
+        "instagram.com",
+        "facebook.com",
+        "tiktok.com",
+        "youtube.com",
+        "lesitedelasneaker.com",
+        "sneakernews.com",
+        "soleretriever.com",
+        "hypebeast.com",
+        "nicekicks.com",
+        "complex.com",
+    ]
+
+    domain = domain_from_url(url)
+
+    if any(blocked in domain for blocked in blocked_price_domains):
+        return None, None, "Price not verified - non-product page"
+
     try:
         r = requests.get(
             url,
@@ -421,7 +439,7 @@ def main():
 
         items.append({
             "sort_total": price if price is not None else 999999,
-            "alert": price is not None and price <= alert_2,
+            "alert": total is not None and total <= alert_2 and "Price verified" in note and "non-product" not in note
             "row": row,
         })
 
