@@ -8,6 +8,7 @@ import requests
 import gspread
 from google.oauth2.service_account import Credentials
 
+
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID")
@@ -21,16 +22,29 @@ RESULTS_SHEET_NAME = "Results"
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message})
+    requests.post(
+        url,
+        data={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+        },
+        timeout=30,
+    )
 
 
 def connect_sheet():
     credentials_dict = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
+
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-    credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
+
+    credentials = Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=scopes,
+    )
+
     client = gspread.authorize(credentials)
     return client.open_by_key(GOOGLE_SHEET_ID)
 
@@ -42,11 +56,14 @@ def normalize(value):
 def read_settings(settings_ws):
     rows = settings_ws.get_all_records()
     settings = {}
+
     for row in rows:
         key = normalize(row.get("Parameter", ""))
         value = normalize(row.get("Value", ""))
+
         if key:
             settings[key] = value
+
     return settings
 
 
@@ -60,10 +77,13 @@ def domain_from_url(url):
 def parse_price(value):
     if value is None:
         return None
-    text = str(value)
-    match = re.search(r"(\d+[.,]?\d*)", text.replace(",", "."))
+
+    text = str(value).replace(",", ".")
+    match = re.search(r"(\d+[.]?\d*)", text)
+
     if not match:
         return None
+
     try:
         return float(match.group(1))
     except Exception:
@@ -72,15 +92,19 @@ def parse_price(value):
 
 def is_excluded(text, exclude_sku):
     text = text.lower()
-    blocked = [
+
+    blocked_terms = [
         exclude_sku.lower(),
-        " preschool",
+        "preschool",
         " ps ",
         " toddler",
         " td ",
         " infant",
+        "kids",
+        "baby",
     ]
-    return any(b in text for b in blocked if b.strip())
+
+    return any(term in text for term in blocked_terms if term.strip())
 
 
 def serpapi_shopping_search(query, max_results):
@@ -92,9 +116,16 @@ def serpapi_shopping_search(query, max_results):
         "hl": "it",
         "num": max_results,
     }
-    response = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
+
+    response = requests.get(
+        "https://serpapi.com/search.json",
+        params=params,
+        timeout=30,
+    )
+
     response.raise_for_status()
     data = response.json()
+
     return data.get("shopping_results", [])
 
 
@@ -107,14 +138,22 @@ def serpapi_google_search(query, max_results):
         "hl": "it",
         "num": max_results,
     }
-    response = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
+
+    response = requests.get(
+        "https://serpapi.com/search.json",
+        params=params,
+        timeout=30,
+    )
+
     response.raise_for_status()
     data = response.json()
+
     return data.get("organic_results", [])
 
 
 def main():
     sheet = connect_sheet()
+
     sources_ws = sheet.worksheet(SOURCE_SHEET_NAME)
     settings_ws = sheet.worksheet(SETTINGS_SHEET_NAME)
     results_ws = sheet.worksheet(RESULTS_SHEET_NAME)
@@ -128,7 +167,10 @@ def main():
     alert_2 = float(settings.get("Alert 2", "400"))
     max_results = int(float(settings.get("Max Results per Site", "20")))
 
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
     allowed_domains = []
+
     for row in source_rows:
         active = normalize(row.get("ATTIVO", "")).upper()
         enabled = normalize(row.get("Enabled", "")).upper()
@@ -138,8 +180,6 @@ def main():
             domain = domain_from_url(url)
             if domain:
                 allowed_domains.append(domain)
-
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     queries = [
         f'"{sku}"',
@@ -152,11 +192,22 @@ def main():
     for query in queries:
         try:
             shopping_results = serpapi_shopping_search(query, max_results)
-        except Exception as e:
+        except Exception as error:
             shopping_results = []
             results_ws.append_row([
-                now, "SYSTEM", sku, "", "", "", "", "",
-                f"Shopping search error: {e}", "", "", "SerpAPI", query
+                now,
+                "SYSTEM",
+                sku,
+                "",
+                "",
+                "",
+                "",
+                "",
+                f"Shopping search error: {error}",
+                "",
+                "",
+                "SerpAPI",
+                query,
             ])
 
         for item in shopping_results:
@@ -175,7 +226,6 @@ def main():
                 continue
 
             site = source or domain_from_url(link) or "Google Shopping"
-            availability = "Possible match"
 
             row = [
                 now,
@@ -186,7 +236,7 @@ def main():
                 price if price is not None else "",
                 "",
                 price if price is not None else "",
-                availability,
+                "Possible match",
                 "",
                 link,
                 "Google Shopping",
@@ -199,19 +249,34 @@ def main():
                 alert_rows.append(row)
 
     try:
-        organic_results = serpapi_google_search(f'"{sku}" OR "{search_term}"', max_results)
-    except Exception as e:
+        organic_results = serpapi_google_search(
+            f'"{sku}" OR "{search_term}"',
+            max_results,
+        )
+    except Exception as error:
         organic_results = []
         results_ws.append_row([
-            now, "SYSTEM", sku, "", "", "", "", "",
-            f"Google search error: {e}", "", "", "SerpAPI", ""
+            now,
+            "SYSTEM",
+            sku,
+            "",
+            "",
+            "",
+            "",
+            "",
+            f"Google search error: {error}",
+            "",
+            "",
+            "SerpAPI",
+            "",
         ])
 
-        for item in organic_results:
+    for item in organic_results:
         title = item.get("title", "")
         link = item.get("link", "")
         snippet = item.get("snippet", "")
         domain = domain_from_url(link)
+
         full_text = f"{title} {snippet} {link}"
 
         if is_excluded(full_text, exclude_sku):
@@ -243,12 +308,16 @@ def main():
         print("WRITING TO GOOGLE SHEETS")
 
         clean_rows = []
+
         for row in found_rows:
-            clean_rows.append([str(cell) if cell is not None else "" for cell in row])
+            clean_rows.append([
+                str(cell) if cell is not None else ""
+                for cell in row
+            ])
 
         results_ws.append_rows(
             clean_rows,
-            value_input_option="USER_ENTERED"
+            value_input_option="USER_ENTERED",
         )
 
     summary = (
@@ -259,10 +328,12 @@ def main():
 
     if alert_rows:
         first_alerts = alert_rows[:5]
+
         details = "\n\n".join([
-            f"🚨 {r[1]}\nPrezzo: {r[5]} €\nLink: {r[10]}"
-            for r in first_alerts
+            f"🚨 {row[1]}\nPrezzo: {row[5]} €\nLink: {row[10]}"
+            for row in first_alerts
         ])
+
         send_telegram(summary + "\n\n" + details)
     else:
         send_telegram(summary + "\n\nNessun prezzo sotto soglia trovato per ora.")
