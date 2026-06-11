@@ -400,6 +400,20 @@ def _price_matches_with_positions(text):
             raw_value = match.group(1)
             value = _parse_visible_amount(raw_value)
             if value is not None and 350 <= value <= 3000:
+                blocked_context = [
+        "klarna",
+        "rate",
+        "rata",
+        "rate da",
+        "installment",
+        "installments",
+        "paypal 3 rate",
+    ]
+
+context = raw_text[max(0, match.start()-50):match.end()+50].lower()
+
+if any(word in context for word in blocked_context):
+    continue
                 prices.append({
                     "value": value,
                     "start": match.start(),
