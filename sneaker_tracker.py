@@ -102,29 +102,22 @@ def parse_price(value):
 
 
 def passes_quality_filter(title, source, link, sku):
-    text = f" {title} {source} {link} ".lower()
+    title_text = f" {title.lower()} "
+    full_text = f" {title} {source} {link} ".lower()
 
-    if any(blocked in text for blocked in BLOCKED_KEYWORDS):
+    if any(blocked in full_text for blocked in BLOCKED_KEYWORDS):
         return False
 
-    has_full_sku = sku.lower() in text
+    title_has_full_sku = sku.lower() in title_text
 
-    has_exact_name = (
-        "travis" in text
-        and "scott" in text
-        and "tropical" in text
-        and "pink" in text
+    title_has_exact_name = (
+        "travis" in title_text
+        and "scott" in title_text
+        and "tropical" in title_text
+        and "pink" in title_text
     )
 
-    has_jordan_context = (
-        "jordan" in text
-        or "air jordan" in text
-        or "aj1" in text
-        or "retro low" in text
-        or "low og" in text
-    )
-
-    return (has_full_sku or has_exact_name) and has_jordan_context
+    return title_has_full_sku or title_has_exact_name
 
 
 def serpapi_shopping_search(query, max_results):
