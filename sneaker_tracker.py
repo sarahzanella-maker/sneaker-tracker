@@ -113,11 +113,28 @@ def domain_from_url(url):
         return ""
 
 
+def detect_currency_symbol(price_text):
+    text = str(price_text)
+
+    if "€" in text or "EUR" in text.upper():
+        return "€"
+
+    if "$" in text or "USD" in text.upper():
+        return "$"
+
+    if "£" in text or "GBP" in text.upper():
+        return "£"
+
+    return "€"
+
+
 def parse_price(value):
     if value is None:
         return None
 
-    text = str(value).replace(",", ".")
+    text = str(value)
+    text = text.replace(",", ".")
+
     match = re.search(r"(\d+[.]?\d*)", text)
 
     if not match:
@@ -127,6 +144,13 @@ def parse_price(value):
         return float(match.group(1))
     except Exception:
         return None
+
+
+def format_money(amount, symbol):
+    if amount is None:
+        return "N/D"
+
+    return f"{symbol}{amount:.2f}"
 
 
 def title_is_valid(title, sku):
@@ -145,6 +169,32 @@ def title_is_valid(title, sku):
     )
 
     return has_full_sku or has_exact_name
+
+
+def get_shipping_text(item):
+    shipping_fields = [
+        item.get("shipping"),
+        item.get("delivery"),
+        item.get("extracted_shipping"),
+    ]
+
+    for field in shipping_fields:
+        if field:
+            return str(field)
+
+    return "N/D"
+
+
+def parse_shipping(shipping_text):
+    if not shipping_text or shipping_text == "N/D":
+        return None
+
+    text = str(shipping_text).lower()
+
+    if "free" in text or "gratis" in text or "gratuita" in text:
+        return 0.0
+
+    return parse_price(shipping_text)
 
 
 def serpapi_shopping_search(query, max_results):
@@ -196,6 +246,7 @@ def write_rows_to_results(results_ws, rows):
         return
 
     clean_rows = []
+
     for row in rows:
         clean_rows.append([str(cell) if cell is not None else "" for cell in row])
 
@@ -245,8 +296,7 @@ def main():
         f'"Travis Scott" "Tropical Pink" "Jordan"',
     ]
 
-    found_rows = []
-    alert_rows = []
+    found_items = []
     filtered_out = 0
 
     for query in queries:
@@ -254,21 +304,24 @@ def main():
             shopping_results = serpapi_shopping_search(query, max_results)
         except Exception as error:
             shopping_results = []
-            found_rows.append([
-                now,
-                "SYSTEM",
-                sku,
-                "",
-                "",
-                "",
-                "",
-                "",
-                f"Shopping search error: {error}",
-                "",
-                "",
-                "SerpAPI",
-                query,
-            ])
+            found_items.append({
+                "sort_total": 999999,
+                "row": [
+                    now,
+                    "SYSTEM",
+                    sku,
+                    "",
+                    "",
+                    "",
+                    "",
+                    "",
+                    f"Shopping search error: {error}",
+                    "",
+                    "",
+                    "SerpAPI",
+                    query,
+                ],
+            })
 
         for item in shopping_results:
             title = item.get("title", "")
@@ -281,7 +334,20 @@ def main():
                 filtered_out += 1
                 continue
 
+            symbol = detect_currency_symbol(price_text)
+
+            shipping_text = get_shipping_text(item)
+            shipping_value = parse_shipping(shipping_text)
+
+            total_value = price
+            if price is not None and shipping_value is not None:
+                total_value = price + shipping_value
+
             site = source or domain_from_url(link) or "Google Shopping"
+
+            price_display = format_money(price, symbol)
+            shipping_display = format_money(shipping_value, symbol) if shipping_value is not None else "N/D"
+            total_display = format_money(total_value, symbol)
 
             row = [
                 now,
@@ -289,9 +355,9 @@ def main():
                 sku,
                 "36 / 36.5 / 4Y / 4.5Y / 4 / 4.5",
                 "GS/Adult",
-                price if price is not None else "",
-                "",
-                price if price is not None else "",
+                price_display,
+                shipping_display,
+                total_display,
                 "Possible match - title filtered",
                 "",
                 link,
@@ -299,10 +365,11 @@ def main():
                 title,
             ]
 
-            found_rows.append(row)
-
-            if price is not None and price <= alert_2:
-                alert_rows.append(row)
+            found_items.append({
+                "sort_total": total_value if total_value is not None else 999999,
+                "row": row,
+                "alert": total_value is not None and total_value <= alert_2,
+            })
 
     try:
         organic_results = serpapi_google_search(
@@ -311,21 +378,24 @@ def main():
         )
     except Exception as error:
         organic_results = []
-        found_rows.append([
-            now,
-            "SYSTEM",
-            sku,
-            "",
-            "",
-            "",
-            "",
-            "",
-            f"Google search error: {error}",
-            "",
-            "",
-            "SerpAPI",
-            "",
-        ])
+        found_items.append({
+            "sort_total": 999999,
+            "row": [
+                now,
+                "SYSTEM",
+                sku,
+                "",
+                "",
+                "",
+                "",
+                "",
+                f"Google search error: {error}",
+                "",
+                "",
+                "SerpAPI",
+                "",
+            ],
+        })
 
     for item in organic_results:
         title = item.get("title", "")
@@ -348,9 +418,9 @@ def main():
             sku,
             "To verify",
             "To verify",
-            "",
-            "",
-            "",
+            "N/D",
+            "N/D",
+            "N/D",
             "Found page - title filtered",
             "",
             link,
@@ -358,32 +428,34 @@ def main():
             title,
         ]
 
-        found_rows.append(row)
+        found_items.append({
+            "sort_total": 999999,
+            "row": row,
+            "alert": False,
+        })
 
-    unique_rows = []
+    unique_items = []
     seen = set()
 
-    for row in found_rows:
+    for item in found_items:
+        row = item["row"]
         key = (
-            str(row[1]).lower().strip(),   # site
-            str(row[5]).lower().strip(),   # price
-            str(row[12]).lower().strip(),  # title
+            str(row[1]).lower().strip(),
+            str(row[5]).lower().strip(),
+            str(row[12]).lower().strip(),
         )
 
         if key in seen:
             continue
 
         seen.add(key)
-        unique_rows.append(row)
+        unique_items.append(item)
 
-    found_rows = unique_rows
+    unique_items.sort(key=lambda x: x["sort_total"])
 
-    alert_rows = [
-        row for row in found_rows
-        if str(row[5]).replace(".", "", 1).isdigit()
-        and float(row[5]) <= alert_2
-    ] 
-    
+    found_rows = [item["row"] for item in unique_items]
+    alert_items = [item for item in unique_items if item.get("alert")]
+
     print(f"FOUND_ROWS = {len(found_rows)}")
     print(f"FILTERED_OUT = {filtered_out}")
     print("WRITING TO GOOGLE SHEETS")
@@ -391,18 +463,23 @@ def main():
     write_rows_to_results(results_ws, found_rows)
 
     summary = (
-        "🔍 Sneaker Tracker V6.2\n\n"
+        "🔍 Sneaker Tracker V6.3\n\n"
         f"Risultati validi: {len(found_rows)}\n"
         f"Scartati dal filtro: {filtered_out}\n"
-        f"Possibili alert ≤ {alert_2} €: {len(alert_rows)}"
+        f"Possibili alert ≤ {alert_2} €: {len(alert_items)}"
     )
 
-    if alert_rows:
-        first_alerts = alert_rows[:5]
+    if alert_items:
+        first_alerts = alert_items[:5]
 
         details = "\n\n".join([
-            f"🚨 {row[1]}\nPrezzo: {row[5]} €\nLink: {row[10]}\nTitolo: {row[12]}"
-            for row in first_alerts
+            f"🚨 {item['row'][1]}\n"
+            f"Price: {item['row'][5]}\n"
+            f"Shipping: {item['row'][6]}\n"
+            f"Total: {item['row'][7]}\n"
+            f"Link: {item['row'][10]}\n"
+            f"Titolo: {item['row'][12]}"
+            for item in first_alerts
         ])
 
         send_telegram(summary + "\n\n" + details)
