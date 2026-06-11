@@ -17,7 +17,6 @@ SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 SOURCE_SHEET_NAME = "Sneaker Sources"
 SETTINGS_SHEET_NAME = "Settings"
 RESULTS_SHEET_NAME = "Results"
-HISTORY_SHEET_NAME = "History"
 
 HEADERS = [
     "Date", "Site", "SKU", "Size", "Type", "Price", "Shipping", "Total",
@@ -110,21 +109,21 @@ def parse_price(value):
     if value is None:
         return None
 
-    text = str(value)
-    text = text.replace("\xa0", " ")
-
+    text = str(value).replace("\xa0", " ")
     matches = re.findall(r"[€$£]?\s?\d{2,5}(?:[.,]\d{2})?", text)
     candidates = []
 
     for m in matches:
         cleaned = m.replace("€", "").replace("$", "").replace("£", "").strip()
+
         if "," in cleaned and "." in cleaned:
             cleaned = cleaned.replace(".", "").replace(",", ".")
         elif "," in cleaned:
             cleaned = cleaned.replace(",", ".")
+
         try:
             val = float(cleaned)
-            if val >= 50:
+            if 80 <= val <= 3000:
                 candidates.append(val)
         except Exception:
             pass
@@ -132,7 +131,7 @@ def parse_price(value):
     if not candidates:
         return None
 
-    return max(candidates)
+    return min(candidates)
 
 
 def money(amount, symbol):
@@ -232,31 +231,19 @@ def verify_page(url, sku):
             except Exception:
                 pass
 
-        # fallback prezzi visibili
         fallback = parse_price(html)
         if fallback:
             price_candidates.append(fallback)
 
-        return None, symbol, f"Price not found - {size_note}", size_value
-
-        valid_prices = [
-            p for p in price_candidates
-            if 80 <= p <= 3000
-]
+        valid_prices = [p for p in price_candidates if 80 <= p <= 3000]
 
         if valid_prices:
             return min(valid_prices), symbol, f"Price verified - {size_note}", size_value
 
+        return None, symbol, f"Price not found - {size_note}", size_value
+
     except Exception as e:
         return None, "€", f"Price not verified - {str(e)[:60]}", ""
-
-
-def ensure_headers(ws):
-    values = ws.get_all_values()
-    if not values:
-        ws.update(values=[HEADERS], range_name="A1:M1")
-    else:
-        ws.update(values=[HEADERS], range_name="A1:M1")
 
 
 def clear_results(ws):
@@ -267,10 +254,20 @@ def clear_results(ws):
 def write_rows(ws, rows):
     if not rows:
         return
+
     clean = [[str(c) if c is not None else "" for c in row] for row in rows]
+
     start = len(ws.get_all_values()) + 1
     end = start + len(clean) - 1
-    ws.update(values=clean, range_name=f"A{start}:M{end}", value_input_option="USER_ENTERED")
+
+    if ws.row_count < end:
+        ws.add_rows(end - ws.row_count)
+
+    ws.update(
+        values=clean,
+        range_name=f"A{start}:M{end}",
+        value_input_option="USER_ENTERED",
+    )
 
 
 def main():
@@ -278,9 +275,7 @@ def main():
     sources_ws = sheet.worksheet(SOURCE_SHEET_NAME)
     settings_ws = sheet.worksheet(SETTINGS_SHEET_NAME)
     results_ws = sheet.worksheet(RESULTS_SHEET_NAME)
-    history_ws = sheet.worksheet(HISTORY_SHEET_NAME)
 
-    ensure_headers(history_ws)
     clear_results(results_ws)
 
     settings = read_settings(settings_ws)
@@ -289,8 +284,8 @@ def main():
     alert_2 = float(settings.get("Alert 2", "400"))
 
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
     source_rows = sources_ws.get_all_records()
+
     rows = []
     alerts = []
     checked = 0
@@ -314,12 +309,13 @@ def main():
         checked += 1
 
         query = f'site:{domain} "{sku}" OR "{search_term}"'
+
         try:
             results = serpapi_google(query, 5)
         except Exception as e:
             rows.append([
                 now, site_name or domain, sku, "", "", "N/D", "N/D", "N/D",
-                f"Search error: {e}", "", site_url, "V9 site search", query
+                f"Search error: {e}", "", site_url, "V9.1 site search", query
             ])
             continue
 
@@ -342,13 +338,13 @@ def main():
             rows.append([
                 now, site_name or domain, sku, "To verify", "To verify",
                 "N/D", "N/D", "N/D", "No product page found",
-                "", site_url, "V9 site search", query
+                "", site_url, "V9.1 site search", query
             ])
             continue
 
         price, symbol, status, size_value = verify_page(best_link, sku)
-
         total = price
+
         row = [
             now,
             site_name or domain,
@@ -361,7 +357,7 @@ def main():
             status,
             "",
             best_link,
-            "V9 site-by-site",
+            "V9.1 site-by-site",
             best_title,
         ]
 
@@ -377,10 +373,9 @@ def main():
     rows.sort(key=sort_key)
 
     write_rows(results_ws, rows)
-    write_rows(history_ws, rows)
 
     summary = (
-        "🔍 Sneaker Tracker V9\n\n"
+        "🔍 Sneaker Tracker V9.1\n\n"
         f"Siti controllati: {checked}\n"
         f"Senza pagina prodotto: {no_result}\n"
         f"Righe salvate: {len(rows)}\n"
