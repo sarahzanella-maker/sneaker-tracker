@@ -109,10 +109,37 @@ def parse_price(value):
 def passes_quality_filter(text):
     text = f" {text.lower()} "
 
-    has_required = any(keyword in text for keyword in REQUIRED_KEYWORDS)
     has_blocked = any(keyword in text for keyword in BLOCKED_KEYWORDS)
 
-    return has_required and not has_blocked
+    has_full_sku = "iq7604-101" in text
+
+    has_name = (
+        "travis" in text
+        and "scott" in text
+        and "tropical" in text
+        and "pink" in text
+    )
+
+    has_sneaker_context = any(keyword in text for keyword in [
+        "jordan",
+        "air jordan",
+        "aj1",
+        "retro low",
+        "low og",
+        "nike",
+        "sneaker",
+        "sneakers",
+        "nocta",
+        "glide",
+        "hikvision",
+        "registratore",
+        "nvr",
+        "camera",
+        "ip ",
+        "ds-7604",
+    ])
+
+    return (has_full_sku or has_name) and has_sneaker_context and not has_blocked
 
 
 def serpapi_shopping_search(query, max_results):
