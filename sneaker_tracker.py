@@ -207,7 +207,7 @@ def main():
             f"Google search error: {e}", "", "", "SerpAPI", ""
         ])
 
-    for item in organic_results:
+        for item in organic_results:
         title = item.get("title", "")
         link = item.get("link", "")
         snippet = item.get("snippet", "")
@@ -238,7 +238,7 @@ def main():
 
         found_rows.append(row)
 
-if found_rows:
+    if found_rows:
         print(f"FOUND_ROWS = {len(found_rows)}")
         print("WRITING TO GOOGLE SHEETS")
 
