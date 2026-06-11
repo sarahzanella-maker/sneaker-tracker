@@ -237,10 +237,15 @@ def verify_page(url, sku):
         if fallback:
             price_candidates.append(fallback)
 
-        if price_candidates:
-            return max(price_candidates), symbol, f"Price verified - {size_note}", size_value
-
         return None, symbol, f"Price not found - {size_note}", size_value
+
+        valid_prices = [
+            p for p in price_candidates
+            if 80 <= p <= 3000
+]
+
+        if valid_prices:
+            return min(valid_prices), symbol, f"Price verified - {size_note}", size_value
 
     except Exception as e:
         return None, "€", f"Price not verified - {str(e)[:60]}", ""
