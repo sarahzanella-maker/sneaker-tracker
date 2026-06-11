@@ -168,11 +168,9 @@ def serpapi_shopping_search(query, max_results):
         "hl": "it",
         "num": max_results,
     }
-
     response = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
     response.raise_for_status()
-    data = response.json()
-    return data.get("shopping_results", [])
+    return response.json().get("shopping_results", [])
 
 
 def serpapi_google_search(query, max_results):
@@ -184,11 +182,35 @@ def serpapi_google_search(query, max_results):
         "hl": "it",
         "num": max_results,
     }
-
     response = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
     response.raise_for_status()
-    data = response.json()
-    return data.get("organic_results", [])
+    return response.json().get("organic_results", [])
+
+
+def find_real_product_link(site, title, sku):
+    query = f'"{site}" "{sku}" "36.5"'
+    try:
+        results = serpapi_google_search(query, 10)
+    except Exception:
+        return ""
+
+    for result in results:
+        result_title = result.get("title", "")
+        result_link = extract_real_link(result.get("link", ""))
+        result_snippet = result.get("snippet", "")
+
+        combined = f"{result_title} {result_snippet} {result_link}".lower()
+
+        if sku.lower() in combined or (
+            "travis" in combined
+            and "scott" in combined
+            and "tropical" in combined
+            and "pink" in combined
+        ):
+            if "google.com" not in result_link:
+                return result_link
+
+    return ""
 
 
 def write_rows_to_results(results_ws, rows):
@@ -292,6 +314,11 @@ def main():
 
             site = source or domain_from_url(link) or "Google Shopping"
 
+            if "google.com" in link:
+                real_link = find_real_product_link(site, title, sku)
+                if real_link:
+                    link = real_link
+
             price_display = format_money(price, symbol)
             shipping_display = format_money(shipping_value, symbol) if shipping_value is not None else "N/D"
             total_display = format_money(total_value, symbol)
@@ -305,10 +332,10 @@ def main():
                 price_display,
                 shipping_display,
                 total_display,
-                "Possible match - title filtered",
+                "Possible match - link lookup",
                 "",
                 link,
-                "Google Shopping",
+                "Google Shopping + Link Lookup",
                 title,
             ]
 
@@ -357,7 +384,7 @@ def main():
             "N/D",
             "N/D",
             "N/D",
-            "Found page - title filtered",
+            "Found page - organic search",
             "",
             link,
             "Google Search",
@@ -399,7 +426,7 @@ def main():
     write_rows_to_results(results_ws, found_rows)
 
     summary = (
-        "🔍 Sneaker Tracker V7\n\n"
+        "🔍 Sneaker Tracker V7.1\n\n"
         f"Risultati validi: {len(found_rows)}\n"
         f"Scartati dal filtro: {filtered_out}\n"
         f"Possibili alert ≤ {alert_2} €: {len(alert_items)}"
