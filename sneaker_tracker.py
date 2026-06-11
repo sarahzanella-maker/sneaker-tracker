@@ -295,7 +295,7 @@ def extract_structured_price(soup):
     return min(prices)
 
 
-def verify_product_page(url, sku, target_sizes):
+def verify_product_page(url, sku, target_sizes, trust_product_url=False):
     if not url:
         return None, "€", "No URL", "To verify"
 
@@ -316,7 +316,7 @@ def verify_product_page(url, sku, target_sizes):
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(" ", strip=True)
 
-        if not title_is_valid(text[:6000], sku):
+        if not trust_product_url and not title_is_valid(text[:6000], sku):
             return None, detect_currency(html), "Rejected - product text not confirmed", "To verify"
 
         symbol = detect_currency(html)
@@ -402,8 +402,10 @@ def main():
             url = product_url
             title = "Product URL from Sources"
             product_url_count += 1
+            trust_product_url = True
         else:
             url, title = find_product_url(domain, sku, search_term, max_results)
+            trust_product_url = False
             if url:
                 google_found_count += 1
 
@@ -422,13 +424,18 @@ def main():
             })
             continue
 
-        price, symbol, status, size = verify_product_page(url, sku, target_sizes)
+        price, symbol, status, size = verify_product_page(
+            url,
+            sku,
+            target_sizes,
+            trust_product_url=trust_product_url,
+        )
 
         if price is not None and status == "Price verified":
             verified_count += 1
 
         raw_results.append({
-            "price": price if price is not None else 999999,
+            "price": price if price is not None else None,
             "row": [
                 "",
                 site or domain,
@@ -441,8 +448,8 @@ def main():
         })
 
     raw_results.sort(
-    key=lambda x: x["price"] if x["price"] is not None else 999999
-)
+        key=lambda x: x["price"] if isinstance(x["price"], (int, float)) else 999999
+    )
 
     final_rows = []
     rank = 1
@@ -450,7 +457,7 @@ def main():
     for item in raw_results:
         row = item["row"]
 
-        if isinstance(item["price"], (int, float)) and item["price"] < 999999:
+        if isinstance(item["price"], (int, float)) and item["price"] > 0:
             row[0] = rank
             rank += 1
         else:
@@ -461,15 +468,14 @@ def main():
     write_results(results_ws, final_rows)
 
     verified_rows = [
-    item
-    for item in raw_results
-    if isinstance(item["price"], (int, float))
-    and item["price"] > 0
-    and item["price"] < 999999
-]
+        item
+        for item in raw_results
+        if isinstance(item["price"], (int, float))
+        and item["price"] > 0
+    ]
 
     summary = (
-        "📊 Sneaker Tracker V11\n\n"
+        "📊 Sneaker Tracker V11.1\n\n"
         f"Siti controllati: {checked}\n"
         f"Product URL usati: {product_url_count}\n"
         f"Trovati via Google: {google_found_count}\n"
