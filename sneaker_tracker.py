@@ -1,4 +1,6 @@
-import os, json, re
+import os
+import json
+import re
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -63,6 +65,22 @@ def normalize(value):
     return str(value).strip()
 
 
+def clean_url(url):
+    if not url:
+        return ""
+
+    url = str(url).strip()
+    url = url.replace("https://https://", "https://")
+    url = url.replace("http://http://", "http://")
+    url = url.replace("http://https://", "https://")
+    url = url.replace("https://http://", "https://")
+
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+
+    return url
+
+
 def read_settings(ws):
     settings = {}
     for row in ws.get_all_records():
@@ -75,14 +93,14 @@ def read_settings(ws):
 
 def domain_from_url(url):
     try:
-        return urlparse(url).netloc.replace("www.", "").lower()
+        return urlparse(clean_url(url)).netloc.replace("www.", "").lower()
     except Exception:
         return ""
 
 
 def path_from_url(url):
     try:
-        return urlparse(url).path.lower()
+        return urlparse(clean_url(url)).path.lower()
     except Exception:
         return ""
 
@@ -110,7 +128,7 @@ def extract_real_link(link):
     link = str(link)
 
     if "google.com" not in link:
-        return link
+        return clean_url(link)
 
     params = parse_qs(urlparse(link).query)
 
@@ -118,9 +136,9 @@ def extract_real_link(link):
         if key in params and params[key]:
             candidate = unquote(params[key][0])
             if candidate.startswith("http") and "google.com" not in candidate:
-                return candidate
+                return clean_url(candidate)
 
-    return link
+    return clean_url(link)
 
 
 def detect_currency(text):
@@ -189,16 +207,32 @@ def title_is_valid(text, sku):
 def size_status(text, target_sizes):
     low = str(text).lower().replace(",", ".")
 
+    found = []
+
     for size in target_sizes:
         s = size.strip().lower()
         if not s:
             continue
 
-        if s in low:
-            return f"{size.strip()} likely"
+        variants = [s]
 
-        if s.endswith("y") and s.replace("y", " y") in low:
-            return f"{size.strip()} likely"
+        if s.endswith("y"):
+            variants.append(s.replace("y", " y"))
+
+        if s == "36.5":
+            variants.extend(["36,5", "eu 36.5", "eu 36,5"])
+        elif s == "36":
+            variants.extend(["eu 36", " 36 "])
+        elif s == "4y":
+            variants.extend(["4 y", "us 4y", "us 4 y"])
+        elif s == "4.5y":
+            variants.extend(["4.5 y", "us 4.5y", "us 4.5 y"])
+
+        if any(v in low for v in variants):
+            found.append(size.strip())
+
+    if found:
+        return " / ".join(found) + " likely"
 
     return "To verify"
 
@@ -219,7 +253,12 @@ def serpapi_google(query, max_results):
     return response.json().get("organic_results", [])
 
 
-def find_product_url(domain, sku, search_term, max_results):
+def find_product_url(domain_url, sku, search_term, max_results):
+    domain = domain_from_url(domain_url)
+
+    if not domain:
+        return "", "Invalid domain"
+
     query = f'site:{domain} "{sku}" OR "{search_term}"'
 
     try:
@@ -299,6 +338,8 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
     if not url:
         return None, "€", "No URL", "To verify"
 
+    url = clean_url(url)
+
     if is_non_product_url(url):
         return None, "€", "Rejected - non-product URL", "To verify"
 
@@ -368,7 +409,10 @@ def main():
 
     sku = settings.get("SKU", "IQ7604-101")
     search_term = settings.get("Search Term", "Travis Scott Tropical Pink")
-    target_sizes = [s.strip() for s in settings.get("Target Sizes", "36,36.5,4Y,4.5Y").split(",")]
+    target_sizes = [
+        s.strip()
+        for s in settings.get("Target Sizes", "36,36.5,4Y,4.5Y").split(",")
+    ]
     max_results = int(float(settings.get("Max Google Results", "10")))
     telegram_top = int(float(settings.get("Telegram Top Results", "5")))
 
@@ -380,20 +424,24 @@ def main():
     verified_count = 0
     product_url_count = 0
     google_found_count = 0
+    manual_check = []
 
     for source in sources:
         site = normalize(source.get("Site", ""))
-        domain = normalize(source.get("Domain", ""))
-        product_url = normalize(source.get("Product URL", ""))
+        domain_raw = normalize(source.get("Domain", ""))
+        product_url_raw = normalize(source.get("Product URL", ""))
         enabled = normalize(source.get("Enabled", "")).upper()
 
         if enabled not in ["TRUE", "YES", "SI", "SÌ", "1"]:
             continue
 
-        if not domain and product_url:
-            domain = domain_from_url(product_url)
+        domain_url = clean_url(domain_raw)
+        product_url = clean_url(product_url_raw) if product_url_raw else ""
 
-        if not domain:
+        if not domain_url and product_url:
+            domain_url = clean_url(domain_from_url(product_url))
+
+        if not domain_url:
             continue
 
         checked += 1
@@ -404,24 +452,24 @@ def main():
             product_url_count += 1
             trust_product_url = True
         else:
-            url, title = find_product_url(domain, sku, search_term, max_results)
+            url, title = find_product_url(domain_url, sku, search_term, max_results)
             trust_product_url = False
             if url:
                 google_found_count += 1
 
         if not url:
-            raw_results.append({
-                "price": None,
-                "row": [
-                    "",
-                    site or domain,
-                    "N/D",
-                    "To verify",
-                    title,
-                    f"https://{domain}",
-                    now,
-                ],
-            })
+            status = title
+            row = [
+                "",
+                site or domain_from_url(domain_url),
+                "N/D",
+                "To verify",
+                status,
+                domain_url,
+                now,
+            ]
+            raw_results.append({"price": None, "row": row})
+            manual_check.append(site or domain_from_url(domain_url))
             continue
 
         price, symbol, status, size = verify_product_page(
@@ -433,12 +481,14 @@ def main():
 
         if price is not None and status == "Price verified":
             verified_count += 1
+        else:
+            manual_check.append(site or domain_from_url(domain_url))
 
         raw_results.append({
             "price": price if price is not None else None,
             "row": [
                 "",
-                site or domain,
+                site or domain_from_url(domain_url),
                 money(price, symbol),
                 size,
                 status,
@@ -475,7 +525,7 @@ def main():
     ]
 
     summary = (
-        "📊 Sneaker Tracker V11.1\n\n"
+        "📊 Sneaker Tracker V11.2\n\n"
         f"Siti controllati: {checked}\n"
         f"Product URL usati: {product_url_count}\n"
         f"Trovati via Google: {google_found_count}\n"
@@ -500,6 +550,20 @@ def main():
 
         if others:
             details += "\n\n📋 Altri prezzi verificati\n" + "\n".join(others)
+
+        if manual_check:
+            unique_manual = []
+            seen = set()
+            for site in manual_check:
+                if site and site not in seen:
+                    seen.add(site)
+                    unique_manual.append(site)
+
+            if unique_manual:
+                details += (
+                    "\n\n⚠️ Da controllare manualmente\n"
+                    + "\n".join(unique_manual[:10])
+                )
 
         send_telegram(summary + details)
     else:
