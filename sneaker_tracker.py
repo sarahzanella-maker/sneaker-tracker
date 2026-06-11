@@ -2,7 +2,7 @@ import os
 import json
 import re
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs, unquote
 
 import requests
 import gspread
@@ -21,69 +21,30 @@ RESULTS_SHEET_NAME = "Results"
 
 
 BLOCKED_KEYWORDS = [
-    "iq7605-101",
-    "preschool",
-    "(ps)",
-    " ps)",
-    "(ps ",
-    " ps ",
-    "toddler",
-    " td ",
-    "(td)",
-    "infant",
-    "kids",
-    "baby",
-    "bambino",
-    "bambina",
-    "junior",
-    "olive",
-    "medium olive",
-    "black olive",
-    "reverse mocha",
-    "canary",
-    "velvet brown",
-    "fragment",
-    "phantom",
-    "air force",
-    "dunk",
-    "air max",
-    "nocta",
-    "glide",
-    "flyease",
-    "why not",
-    "zer0.4",
-    "hikvision",
-    "registratore",
-    "nvr",
-    "camera",
-    "dispositivo",
-    "protezione ip",
-    "ds-7604",
+    "iq7605-101", "preschool", "(ps)", " ps)", "(ps ", " ps ",
+    "toddler", " td ", "(td)", "infant", "kids", "baby",
+    "bambino", "bambina", "junior",
+    "olive", "medium olive", "black olive", "reverse mocha",
+    "canary", "velvet brown", "fragment", "phantom",
+    "air force", "dunk", "air max", "nocta", "glide",
+    "flyease", "why not", "zer0.4",
+    "hikvision", "registratore", "nvr", "camera",
+    "dispositivo", "protezione ip", "ds-7604",
 ]
 
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(
-        url,
-        data={"chat_id": TELEGRAM_CHAT_ID, "text": message},
-        timeout=30,
-    )
+    requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=30)
 
 
 def connect_sheet():
     credentials_dict = json.loads(GOOGLE_SERVICE_ACCOUNT_JSON)
-
     scopes = [
         "https://www.googleapis.com/auth/spreadsheets",
         "https://www.googleapis.com/auth/drive",
     ]
-
-    credentials = Credentials.from_service_account_info(
-        credentials_dict,
-        scopes=scopes,
-    )
-
+    credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
     client = gspread.authorize(credentials)
     return client.open_by_key(GOOGLE_SHEET_ID)
 
@@ -95,14 +56,11 @@ def normalize(value):
 def read_settings(settings_ws):
     rows = settings_ws.get_all_records()
     settings = {}
-
     for row in rows:
         key = normalize(row.get("Parameter", ""))
         value = normalize(row.get("Value", ""))
-
         if key:
             settings[key] = value
-
     return settings
 
 
@@ -113,33 +71,45 @@ def domain_from_url(url):
         return ""
 
 
+def extract_real_link(possible_link):
+    if not possible_link:
+        return ""
+
+    link = str(possible_link)
+
+    if "google.com" not in link:
+        return link
+
+    parsed = urlparse(link)
+    params = parse_qs(parsed.query)
+
+    for key in ["url", "q"]:
+        if key in params and params[key]:
+            candidate = unquote(params[key][0])
+            if candidate.startswith("http") and "google.com" not in candidate:
+                return candidate
+
+    return link
+
+
 def detect_currency_symbol(price_text):
     text = str(price_text)
-
     if "€" in text or "EUR" in text.upper():
         return "€"
-
     if "$" in text or "USD" in text.upper():
         return "$"
-
     if "£" in text or "GBP" in text.upper():
         return "£"
-
     return "€"
 
 
 def parse_price(value):
     if value is None:
         return None
-
-    text = str(value)
-    text = text.replace(",", ".")
-
+    text = str(value).replace(",", ".")
     match = re.search(r"(\d+[.]?\d*)", text)
-
     if not match:
         return None
-
     try:
         return float(match.group(1))
     except Exception:
@@ -149,7 +119,6 @@ def parse_price(value):
 def format_money(amount, symbol):
     if amount is None:
         return "N/D"
-
     return f"{symbol}{amount:.2f}"
 
 
@@ -172,16 +141,9 @@ def title_is_valid(title, sku):
 
 
 def get_shipping_text(item):
-    shipping_fields = [
-        item.get("shipping"),
-        item.get("delivery"),
-        item.get("extracted_shipping"),
-    ]
-
-    for field in shipping_fields:
+    for field in [item.get("shipping"), item.get("delivery"), item.get("extracted_shipping")]:
         if field:
             return str(field)
-
     return "N/D"
 
 
@@ -207,15 +169,9 @@ def serpapi_shopping_search(query, max_results):
         "num": max_results,
     }
 
-    response = requests.get(
-        "https://serpapi.com/search.json",
-        params=params,
-        timeout=30,
-    )
-
+    response = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
     response.raise_for_status()
     data = response.json()
-
     return data.get("shopping_results", [])
 
 
@@ -229,15 +185,9 @@ def serpapi_google_search(query, max_results):
         "num": max_results,
     }
 
-    response = requests.get(
-        "https://serpapi.com/search.json",
-        params=params,
-        timeout=30,
-    )
-
+    response = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
     response.raise_for_status()
     data = response.json()
-
     return data.get("organic_results", [])
 
 
@@ -246,7 +196,6 @@ def write_rows_to_results(results_ws, rows):
         return
 
     clean_rows = []
-
     for row in rows:
         clean_rows.append([str(cell) if cell is not None else "" for cell in row])
 
@@ -307,26 +256,24 @@ def main():
             found_items.append({
                 "sort_total": 999999,
                 "row": [
-                    now,
-                    "SYSTEM",
-                    sku,
-                    "",
-                    "",
-                    "",
-                    "",
-                    "",
-                    f"Shopping search error: {error}",
-                    "",
-                    "",
-                    "SerpAPI",
-                    query,
+                    now, "SYSTEM", sku, "", "", "", "", "",
+                    f"Shopping search error: {error}", "", "", "SerpAPI", query,
                 ],
             })
 
         for item in shopping_results:
             title = item.get("title", "")
             source = item.get("source", "")
-            link = item.get("link") or item.get("product_link") or ""
+
+            raw_link = (
+                item.get("product_link")
+                or item.get("link")
+                or item.get("serpapi_product_api")
+                or ""
+            )
+
+            link = extract_real_link(raw_link)
+
             price_text = item.get("price", "")
             price = item.get("extracted_price") or parse_price(price_text)
 
@@ -381,25 +328,14 @@ def main():
         found_items.append({
             "sort_total": 999999,
             "row": [
-                now,
-                "SYSTEM",
-                sku,
-                "",
-                "",
-                "",
-                "",
-                "",
-                f"Google search error: {error}",
-                "",
-                "",
-                "SerpAPI",
-                "",
+                now, "SYSTEM", sku, "", "", "", "", "",
+                f"Google search error: {error}", "", "", "SerpAPI", "",
             ],
         })
 
     for item in organic_results:
         title = item.get("title", "")
-        link = item.get("link", "")
+        link = extract_real_link(item.get("link", ""))
         snippet = item.get("snippet", "")
         domain = domain_from_url(link)
 
@@ -463,7 +399,7 @@ def main():
     write_rows_to_results(results_ws, found_rows)
 
     summary = (
-        "🔍 Sneaker Tracker V6.3\n\n"
+        "🔍 Sneaker Tracker V7\n\n"
         f"Risultati validi: {len(found_rows)}\n"
         f"Scartati dal filtro: {filtered_out}\n"
         f"Possibili alert ≤ {alert_2} €: {len(alert_items)}"
