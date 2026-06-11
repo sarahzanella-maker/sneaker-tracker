@@ -22,14 +22,7 @@ RESULTS_SHEET_NAME = "Results"
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    requests.post(
-        url,
-        data={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-        },
-        timeout=30,
-    )
+    requests.post(url, data={"chat_id": TELEGRAM_CHAT_ID, "text": message}, timeout=30)
 
 
 def connect_sheet():
@@ -40,11 +33,7 @@ def connect_sheet():
         "https://www.googleapis.com/auth/drive",
     ]
 
-    credentials = Credentials.from_service_account_info(
-        credentials_dict,
-        scopes=scopes,
-    )
-
+    credentials = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
     client = gspread.authorize(credentials)
     return client.open_by_key(GOOGLE_SHEET_ID)
 
@@ -117,15 +106,10 @@ def serpapi_shopping_search(query, max_results):
         "num": max_results,
     }
 
-    response = requests.get(
-        "https://serpapi.com/search.json",
-        params=params,
-        timeout=30,
-    )
-
+    response = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
     response.raise_for_status()
-    data = response.json()
 
+    data = response.json()
     return data.get("shopping_results", [])
 
 
@@ -139,16 +123,30 @@ def serpapi_google_search(query, max_results):
         "num": max_results,
     }
 
-    response = requests.get(
-        "https://serpapi.com/search.json",
-        params=params,
-        timeout=30,
-    )
-
+    response = requests.get("https://serpapi.com/search.json", params=params, timeout=30)
     response.raise_for_status()
-    data = response.json()
 
+    data = response.json()
     return data.get("organic_results", [])
+
+
+def write_rows_to_results(results_ws, rows):
+    if not rows:
+        return
+
+    clean_rows = []
+    for row in rows:
+        clean_rows.append([str(cell) if cell is not None else "" for cell in row])
+
+    existing_rows = len(results_ws.get_all_values())
+    start_row = existing_rows + 1
+    end_row = start_row + len(clean_rows) - 1
+
+    results_ws.update(
+        f"A{start_row}:M{end_row}",
+        clean_rows,
+        value_input_option="USER_ENTERED",
+    )
 
 
 def main():
@@ -194,7 +192,7 @@ def main():
             shopping_results = serpapi_shopping_search(query, max_results)
         except Exception as error:
             shopping_results = []
-            results_ws.append_row([
+            found_rows.append([
                 now,
                 "SYSTEM",
                 sku,
@@ -249,13 +247,10 @@ def main():
                 alert_rows.append(row)
 
     try:
-        organic_results = serpapi_google_search(
-            f'"{sku}" OR "{search_term}"',
-            max_results,
-        )
+        organic_results = serpapi_google_search(f'"{sku}" OR "{search_term}"', max_results)
     except Exception as error:
         organic_results = []
-        results_ws.append_row([
+        found_rows.append([
             now,
             "SYSTEM",
             sku,
@@ -303,22 +298,10 @@ def main():
 
         found_rows.append(row)
 
-    if found_rows:
-        print(f"FOUND_ROWS = {len(found_rows)}")
-        print("WRITING TO GOOGLE SHEETS")
+    print(f"FOUND_ROWS = {len(found_rows)}")
+    print("WRITING TO GOOGLE SHEETS")
 
-        clean_rows = []
-
-        for row in found_rows:
-            clean_rows.append([
-                str(cell) if cell is not None else ""
-                for cell in row
-            ])
-
-        results_ws.append_rows(
-            clean_rows,
-            value_input_option="USER_ENTERED",
-        )
+    write_rows_to_results(results_ws, found_rows)
 
     summary = (
         "🔍 Sneaker Tracker V5\n\n"
