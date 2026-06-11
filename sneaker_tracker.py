@@ -396,7 +396,7 @@ def extract_visible_price(text):
     for pattern in patterns:
         for match in re.findall(pattern, str(text), flags=re.IGNORECASE):
             value = parse_price(match)
-            if value is not None:
+            if value is not None and 300 <= value <= 3000:
                 prices.append(value)
 
     if not prices:
