@@ -713,12 +713,28 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
         text = soup.get_text(" ", strip=True)
 
         if "laced.com" in url.lower():
-            print("\n===== LACED DEBUG =====")
+            print("\n===== LACED TEXT DEBUG =====")
             print(text[:5000])
+            print("\n===== LACED HTML DEBUG =====")
+            print(html[:10000])
 
         if "crepdogcrew" in url.lower():
-            print("\n===== CDCREW DEBUG =====")
+            print("\n===== CDCREW TEXT DEBUG =====")
             print(text[:5000])
+            print("\n===== CDCREW HTML DEBUG =====")
+            print(html[:10000])
+
+        if "novelship" in url.lower():
+            print("\n===== NOVELSHIP TEXT DEBUG =====")
+            print(text[:5000])
+            print("\n===== NOVELSHIP HTML DEBUG =====")
+            print(html[:10000])
+
+        if "zneakerz" in url.lower():
+            print("\n===== ZNEAKERZ TEXT DEBUG =====")
+            print(text[:5000])
+            print("\n===== ZNEAKERZ HTML DEBUG =====")
+            print(html[:10000])
 
         if not trust_product_url and not title_is_valid(text[:6000], sku):
             return None, detect_currency(html), "Rejected - product text not confirmed", "To verify"
@@ -742,6 +758,13 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
                 price = visible_price
                 price_source = "visible-size"
 
+        if price is None:
+            embedded_price = extract_embedded_price(html)
+
+            if embedded_price is not None:
+                price = embedded_price
+                price_source = "embedded"
+        
         if price is None and "crepdogcrew" in url.lower():
             cd_price = extract_cdcrew_price(text)
 
