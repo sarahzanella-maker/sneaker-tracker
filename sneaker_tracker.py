@@ -1,6 +1,7 @@
 import os
 import json
 import re
+import traceback
 from datetime import datetime
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -958,10 +959,8 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
         return None, symbol, "Price not found", size
 
     except Exception as error:
-        print("\n===== ERROR DEBUG =====")
-        print("URL:", url)
-        print("ERROR TYPE:", type(error).__name__)
-        print("ERROR:", repr(error))
+        print("\n===== FULL ERROR =====")
+        traceback.print_exc()
         return None, "€", f"Not verified - {type(error).__name__}: {str(error)[:80]}", "To verify"
 
 
