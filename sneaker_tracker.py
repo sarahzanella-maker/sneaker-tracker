@@ -240,16 +240,61 @@ def get_trust(site):
     return DEFAULT_TRUST
 
 
-def title_is_valid(text, sku):
+def _contains_blocked_term(text):
     text = f" {str(text).lower()} "
 
-    if any(term in text for term in BLOCKED_TERMS):
+    for term in BLOCKED_TERMS:
+        t = term.strip().lower()
+        if not t:
+            continue
+
+        # Avoid rejecting marketplace names like SnkrDunk when only the shoe model "Dunk" should be blocked.
+        if t == "dunk":
+            if re.search(r"\bdunk\b", text):
+                return True
+            continue
+
+        if " " in t or "-" in t or t.startswith("iq"):
+            if t in text:
+                return True
+        else:
+            if re.search(rf"\b{re.escape(t)}\b", text):
+                return True
+
+    return False
+
+
+def product_score(text, sku):
+    text = f" {str(text).lower()} "
+    score = 0
+
+    if sku.lower() in text:
+        score += 5
+    if "travis" in text:
+        score += 1
+    if "scott" in text:
+        score += 1
+    if "tropical" in text:
+        score += 1
+    if "pink" in text:
+        score += 1
+    if "jordan" in text:
+        score += 1
+    if "air jordan" in text:
+        score += 1
+    if "sail" in text:
+        score += 1
+
+    return score
+
+
+def title_is_valid(text, sku):
+    text = str(text)
+
+    if _contains_blocked_term(text):
         return False
 
-    has_sku = sku.lower() in text
-    has_name = all(word in text for word in ["travis", "scott", "tropical", "pink"])
-
-    return has_sku or has_name
+    return product_score(text, sku) >= 4
 
 
 def size_status(text, target_sizes):
@@ -406,16 +451,8 @@ def _price_matches_with_positions(text):
     raw_text = str(text)
 
     blocked_context = [
-        "klarna",
-        "rate",
-        "rata",
-        "rate da",
-        "installment",
-        "installments",
-        "paypal",
-        "split in",
-        "pay in 3",
-        "3 rate",
+        "klarna", "rate", "rata", "rate da", "installment", "installments",
+        "paypal", "scalapay", "afterpay", "split in", "pay in 3", "3 rate",
     ]
 
     for pattern in patterns:
@@ -424,6 +461,8 @@ def _price_matches_with_positions(text):
             value = _parse_visible_amount(raw_value)
 
             if value is None:
+                continue
+            if not (MIN_VISIBLE_PRICE <= value <= MAX_PRICE):
                 continue
 
             context = raw_text[
@@ -551,7 +590,7 @@ def try_shopify_product_json(url):
                 price_float = float(price)
                 if price_float > 3000:
                     price_float = price_float / 100
-                if 80 <= price_float <= MAX_PRICE:
+                if MIN_VISIBLE_PRICE <= price_float <= MAX_PRICE:
                     prices.append(price_float)
             except Exception:
                 pass
@@ -563,6 +602,55 @@ def try_shopify_product_json(url):
 
     except Exception:
         return None
+
+
+def _normalize_embedded_price(value):
+    parsed = parse_price(value)
+    if parsed is not None and MIN_VISIBLE_PRICE <= parsed <= MAX_PRICE:
+        return parsed
+
+    try:
+        raw = str(value).strip()
+        if re.fullmatch(r"\d{5,6}", raw):
+            cents = float(raw) / 100
+            if MIN_VISIBLE_PRICE <= cents <= MAX_PRICE:
+                return cents
+    except Exception:
+        pass
+
+    return None
+
+
+def extract_embedded_price(html):
+    """Fallback for JS state objects such as __NEXT_DATA__, initial state, or data-price fields."""
+    raw = str(html)
+    patterns = [
+        r"[\"'](?:price|currentPrice|salePrice|regularPrice|amount|priceAmount|finalPrice)[\"']\s*:\s*[\"']?(\d{2,6}(?:[.,]\d{2})?)[\"']?",
+        r"[\"'](?:value|centAmount)[\"']\s*:\s*[\"']?(\d{4,6})[\"']?",
+        r"(?:data-price|data-product-price|variant-price)[=:\s\"']+(\d{2,6}(?:[.,]\d{2})?)",
+    ]
+
+    blocked_context = [
+        "klarna", "rate", "rata", "installment", "installments", "paypal", "scalapay",
+    ]
+
+    candidates = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, raw, flags=re.IGNORECASE):
+            value = _normalize_embedded_price(match.group(1))
+            if value is None:
+                continue
+
+            context = raw[max(0, match.start() - 80):min(len(raw), match.end() + 80)].lower()
+            if any(word in context for word in blocked_context):
+                continue
+
+            candidates.append(value)
+
+    if not candidates:
+        return None
+
+    return min(candidates)
 
 
 def verify_product_page(url, sku, target_sizes, trust_product_url=False):
@@ -601,6 +689,12 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
             if shopify_price is not None:
                 price = shopify_price
                 price_source = "shopify-json"
+
+        if price is None:
+            embedded_price = extract_embedded_price(html)
+            if embedded_price is not None:
+                price = embedded_price
+                price_source = "embedded"
 
         if price is None:
             price = extract_visible_price_for_sizes(text, target_sizes)
@@ -771,7 +865,7 @@ def main():
     ]
 
     summary = (
-        "📊 Sneaker Tracker V12-fixed\n\n"
+        "📊 Sneaker Tracker V12.1\n\n"
         f"Siti controllati: {checked}\n"
         f"Product URL usati: {product_url_count}\n"
         f"Trovati via Google: {google_found_count}\n"
