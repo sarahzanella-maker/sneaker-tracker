@@ -156,6 +156,10 @@ def path_from_url(url):
 
 
 def is_non_product_url(url):
+    url_l = str(url).lower()
+
+    if "stockx.com/" in url_l:
+        return False
     domain = domain_from_url(url)
     path = path_from_url(url)
 
