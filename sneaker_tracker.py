@@ -976,8 +976,13 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
         print("\n===== ERROR URL =====")
         print(url)
 
-        print("\n===== FULL ERROR =====")
+        print("\n===== ERROR TYPE =====")
+        print(type(error))
+
+        print("\n===== FULL TRACEBACK =====")
         traceback.print_exc()
+
+        raise
 
         return None, "€", f"Not verified - {type(error).__name__}: {str(error)[:80]}", "To verify"
 
