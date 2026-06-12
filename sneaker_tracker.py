@@ -582,13 +582,20 @@ def extract_jsonld_size_price(soup, target_sizes):
         if availability and "instock" not in availability and "in stock" not in availability:
             continue
 
-        possible_prices = [
-            offer.get("lowPrice"),
-            offer.get("price"),
-        ]
+        possible_prices = []
+
+        if offer.get("lowPrice"):
+            possible_prices.append(offer.get("lowPrice"))
+
+        if offer.get("price"):
+            possible_prices.append(offer.get("price"))
 
         for price in possible_prices:
-            value = price_value_in_eur(price, currency, min_price=MIN_VISIBLE_PRICE)
+            value = price_value_in_eur(
+                price,
+                currency,
+                min_price=MIN_VISIBLE_PRICE
+            )
 
             if value is not None:
                 candidates.append(value)
