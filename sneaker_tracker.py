@@ -946,7 +946,9 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
             print("\n========================")
             print(url)
             print("========================")
-            print(text[:15000])
+            with open(f"debug_{url.split('/')[2].replace('.', '_')}.txt", "w", encoding="utf-8") as f:
+                f.write(text[:50000])
+            print("DEBUG SAVED:", url)
 
         if not trust_product_url and not title_is_valid(text[:6000], sku):
             return None, detect_currency(html), "Rejected - product text not confirmed", "To verify"
