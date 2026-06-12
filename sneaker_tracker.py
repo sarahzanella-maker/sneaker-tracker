@@ -9,6 +9,7 @@ import requests
 import gspread
 from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
+from playwright.sync_api import sync_playwright
 
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -876,6 +877,33 @@ def extract_embedded_price(html):
 
     return min(candidates)
 
+def fetch_with_playwright(url):
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+
+            page = browser.new_page(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                )
+            )
+
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(5000)
+
+            html = page.content()
+
+            browser.close()
+            return html
+
+    except Exception as error:
+        print("\n===== PLAYWRIGHT ERROR =====")
+        print(url)
+        print(error)
+        return None
+
 
 def verify_product_page(url, sku, target_sizes, trust_product_url=False):
     if not url:
@@ -894,9 +922,13 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
         )
 
         if response.status_code >= 400:
-            return None, "€", f"Not verified - HTTP {response.status_code}", "To verify"
+            html = fetch_with_playwright(url)
 
-        html = response.text
+            if not html:
+                return None, "€", f"Not verified - HTTP {response.status_code}", "To verify"
+        else:
+            html = response.text
+            
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(" ", strip=True)
 
