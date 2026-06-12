@@ -928,59 +928,25 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
                 return None, "€", f"Not verified - HTTP {response.status_code}", "To verify"
         else:
             html = response.text
-            
+
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(" ", strip=True)
 
-        try:
-            response = requests.get(
-                url,
-                headers={"User-Agent": "Mozilla/5.0"},
-                timeout=25,
-            )
+        DEBUG_SITES = [
+            "goat",
+            "kickscrew",
+            "kicksonfire",
+            "crepdogcrew",
+            "novelship",
+            "snkrdunk",
+            "klekt",
+        ]
 
-            if response.status_code >= 400:
-                html = fetch_with_playwright(url)
-
-                if not html:
-                     return None, "€", f"Not verified - HTTP {response.status_code}", "To verify"
-            else:
-                html = response.text
-
-            soup = BeautifulSoup(html, "html.parser")
-            text = soup.get_text(" ", strip=True)
-
-            DEBUG_SITES = [
-                "goat",
-                "kickscrew",
-                "kicksonfire",
-                "crepdogcrew",
-                "novelship",
-                "snkrdunk",
-                "klekt",
-            ]
-
-            if any(site in url.lower() for site in DEBUG_SITES):
-                print("\n========================")
-                print(url)
-                print("========================")
-                print(text[:15000])
-
-        if "novelship" in url.lower():
-            print("\n===== NOVELSHIP HTML DEBUG =====")
-            print(html[:100000])
-
-        if "klekt" in url.lower():
-            print("\n===== KLEKT HTML DEBUG =====")
-            print(html[:30000])
-
-        if "crepdogcrew" in url.lower():
-            print("\n===== CDCREW HTML DEBUG =====")
-            print(html[:30000])
-
-        if "snkrdunk" in url.lower():
-            print("\n===== SNKRDUNK HTML DEBUG =====")
-            print(html[:30000])
+        if any(site in url.lower() for site in DEBUG_SITES):
+            print("\n========================")
+            print(url)
+            print("========================")
+            print(text[:15000])
 
         if not trust_product_url and not title_is_valid(text[:6000], sku):
             return None, detect_currency(html), "Rejected - product text not confirmed", "To verify"
