@@ -431,6 +431,42 @@ def extract_structured_price(soup):
 
     return min(prices)
 
+def extract_cdcrew_price(text):
+    m = re.search(
+        r'€\s?(\d{2,5}[.,]\d{2})\s?EUR',
+        str(text),
+        re.IGNORECASE
+    )
+
+    if not m:
+        return None
+
+    return parse_price(m.group(1), min_price=350)
+
+
+def extract_laced_price(text):
+    matches = re.findall(
+        r'(\d{3,5})\s?€',
+        str(text),
+        re.IGNORECASE
+    )
+
+    prices = []
+
+    for p in matches:
+        try:
+            value = float(p)
+
+            if 350 <= value <= 3000:
+                prices.append(value)
+
+        except Exception:
+            pass
+
+    if not prices:
+        return None
+
+    return max(prices)
 
 def _parse_visible_amount(value):
     return parse_price(value, min_price=MIN_VISIBLE_PRICE)
@@ -686,13 +722,31 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
 
         if price is None:
             shopify_price = try_shopify_product_json(url)
+
             if shopify_price is not None:
                 price = shopify_price
                 price_source = "shopify-json"
 
         if price is None:
-            price = extract_visible_price_for_sizes(text, target_sizes)
-            price_source = "visible-size"
+            visible_price = extract_visible_price_for_sizes(text, target_sizes)
+
+            if visible_price is not None:
+                price = visible_price
+                price_source = "visible-size"
+
+        if price is None and "crepdogcrew" in url.lower():
+            cd_price = extract_cdcrew_price(text)
+
+            if cd_price is not None:
+                price = cd_price
+                price_source = "cdcrew"
+
+        if price is None and "laced.com" in url.lower():
+            laced_price = extract_laced_price(text)
+
+            if laced_price is not None:
+                price = laced_price
+                price_source = "laced"
 
         size = size_status(text, target_sizes)
 
