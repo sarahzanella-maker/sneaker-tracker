@@ -577,7 +577,7 @@ def extract_jsonld_size_price(soup, target_sizes):
                 continue
 
             price = offer.get("price") or offer.get("lowPrice")
-            currency = offer.get("priceCurrency") or "EUR"
+            currency = (offer.get("priceCurrency") or "EUR").upper()
             value = price_value_in_eur(price, currency, min_price=MIN_VISIBLE_PRICE)
 
             availability = str(offer.get("availability", "")).lower()
