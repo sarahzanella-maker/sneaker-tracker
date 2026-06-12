@@ -25,6 +25,16 @@ RESULT_HEADERS = ["Rank", "Site", "Trust", "Price", "Size", "Status", "URL", "La
 MIN_VISIBLE_PRICE = 350
 MAX_PRICE = 3000
 
+# Approximate FX rates to EUR. Used only to make non-EUR sites comparable.
+# Keep conservative; actual checkout totals may differ.
+FX_TO_EUR = {
+    "EUR": 1.00,
+    "GBP": 1.18,
+    "USD": 0.92,
+    "INR": 0.0107,
+}
+
+
 BLOCKED_TERMS = [
     "iq7605-101", "preschool", "(ps)", " ps ", "toddler", "(td)", " td ",
     "infant", "kids", "baby", "junior", "bambino", "bambina",
@@ -188,41 +198,93 @@ def detect_currency(text):
         return "$"
     if "£" in text or "GBP" in text.upper():
         return "£"
+    if "₹" in text or "INR" in text.upper():
+        return "₹"
 
     return "€"
 
 
-def parse_price(value, min_price=80):
+def parse_numeric_amount(value):
+    """Parse a numeric price without applying min/max filters."""
     if value is None:
         return None
 
     text = str(value).replace("\xa0", " ").strip()
-
     if not re.search(r"\d", text):
         return None
 
-    text = text.replace("€", "").replace("$", "").replace("£", "")
-    text = text.replace("EUR", "").replace("USD", "").replace("GBP", "")
+    text = re.sub(r"(?i)\b(EUR|USD|GBP|INR)\b", "", text)
+    text = text.replace("€", "").replace("$", "").replace("£", "").replace("₹", "")
     text = text.strip()
 
-    if "," in text and "." in text:
-        text = text.replace(".", "").replace(",", ".")
-    elif "," in text:
-        text = text.replace(",", ".")
-
-    match = re.search(r"\d+(?:\.\d+)?", text)
-
+    # Keep only digits and separators.
+    match = re.search(r"\d[\d.,]*", text)
     if not match:
         return None
 
+    num = match.group(0)
+
+    if "," in num and "." in num:
+        # Last separator is decimal; the other is thousands.
+        if num.rfind(",") > num.rfind("."):
+            num = num.replace(".", "").replace(",", ".")
+        else:
+            num = num.replace(",", "")
+    elif "," in num:
+        parts = num.split(",")
+        if len(parts[-1]) == 2:
+            num = num.replace(".", "").replace(",", ".")
+        else:
+            num = num.replace(",", "")
+    else:
+        # Dot may be decimal or thousands. If exactly three digits after it and no decimals, treat as thousands.
+        parts = num.split(".")
+        if len(parts) > 1 and len(parts[-1]) == 3:
+            num = num.replace(".", "")
+
     try:
-        amount = float(match.group(0))
-        if min_price <= amount <= MAX_PRICE:
-            return amount
-        return None
+        return float(num)
     except Exception:
         return None
 
+
+def convert_to_eur(amount, currency):
+    if amount is None:
+        return None
+
+    cur = str(currency or "EUR").upper().strip()
+    rate = FX_TO_EUR.get(cur)
+    if rate is None:
+        return None
+
+    value = float(amount) * rate
+    if MIN_VISIBLE_PRICE <= value <= MAX_PRICE:
+        return round(value, 2)
+    return None
+
+
+def price_value_in_eur(value, currency="EUR", min_price=80):
+    amount = parse_numeric_amount(value)
+    if amount is None:
+        return None
+
+    cur = str(currency or "EUR").upper().strip()
+    if cur == "EUR":
+        if min_price <= amount <= MAX_PRICE:
+            return amount
+        return None
+
+    return convert_to_eur(amount, cur)
+
+
+def parse_price(value, min_price=80):
+    amount = parse_numeric_amount(value)
+    if amount is None:
+        return None
+
+    if min_price <= amount <= MAX_PRICE:
+        return amount
+    return None
 
 def money(amount, symbol):
     if amount is None:
@@ -430,6 +492,103 @@ def extract_structured_price(soup):
         return None
 
     return min(prices)
+
+def iter_json_objects(data):
+    if isinstance(data, dict):
+        yield data
+        for value in data.values():
+            yield from iter_json_objects(value)
+    elif isinstance(data, list):
+        for item in data:
+            yield from iter_json_objects(item)
+
+
+def load_jsonld_objects(soup):
+    objects = []
+
+    for script in soup.find_all("script", type="application/ld+json"):
+        raw = script.string or script.get_text()
+        if not raw:
+            continue
+
+        try:
+            data = json.loads(raw)
+        except Exception:
+            continue
+
+        objects.extend(list(iter_json_objects(data)))
+
+    return objects
+
+
+def target_size_patterns(target_sizes):
+    patterns = []
+
+    for size in target_sizes:
+        s = str(size).strip().lower().replace(",", ".")
+        if not s:
+            continue
+
+        if s == "36":
+            patterns.extend([r"\beu\s*36\b", r"\b36\b", r"\buk\s*3\.5\b", r"\bus\s*4\b", r"\b3\.5\b"])
+        elif s == "36.5":
+            patterns.extend([r"\beu\s*36\.5\b", r"\b36\.5\b", r"\buk\s*4\b", r"\bus\s*4\.5\b", r"\b4\.5y\b"])
+        elif s == "4y":
+            patterns.extend([r"\bus\s*4y\b", r"\b4y\b", r"\bus\s*4\b"])
+        elif s == "4.5y":
+            patterns.extend([r"\bus\s*4\.5y\b", r"\b4\.5y\b", r"\bus\s*4\.5\b"])
+        else:
+            patterns.append(rf"\b{re.escape(s)}\b")
+
+    # Prefer explicit EU patterns over loose numeric ones.
+    return list(dict.fromkeys(patterns))
+
+
+def text_matches_target_size(text, target_sizes):
+    normalized = str(text or "").lower().replace(",", ".")
+    for pattern in target_size_patterns(target_sizes):
+        if re.search(pattern, normalized, flags=re.IGNORECASE):
+            return True
+    return False
+
+
+def extract_jsonld_size_price(soup, target_sizes):
+    """Read JSON-LD variants and return a EUR price only for target sizes."""
+    candidates = []
+
+    for obj in load_jsonld_objects(soup):
+        if not isinstance(obj, dict):
+            continue
+
+        size_text = " ".join([
+            str(obj.get("size", "")),
+            str(obj.get("name", "")),
+            str(obj.get("sku", "")),
+        ])
+
+        if not text_matches_target_size(size_text, target_sizes):
+            continue
+
+        offers = obj.get("offers")
+        offer_list = offers if isinstance(offers, list) else [offers]
+
+        for offer in offer_list:
+            if not isinstance(offer, dict):
+                continue
+
+            price = offer.get("price") or offer.get("lowPrice")
+            currency = offer.get("priceCurrency") or "EUR"
+            value = price_value_in_eur(price, currency, min_price=MIN_VISIBLE_PRICE)
+
+            availability = str(offer.get("availability", "")).lower()
+            if value is not None and (not availability or "instock" in availability or "in stock" in availability):
+                candidates.append(value)
+
+    if not candidates:
+        return None
+
+    return min(candidates)
+
 
 def extract_cdcrew_price(text):
     m = re.search(
@@ -712,37 +871,17 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(" ", strip=True)
 
-        if "laced.com" in url.lower():
-            print("\n===== LACED TEXT DEBUG =====")
-            print(text[:5000])
-            print("\n===== LACED HTML DEBUG =====")
-            print(html[:10000])
-
-        if "crepdogcrew" in url.lower():
-            print("\n===== CDCREW TEXT DEBUG =====")
-            print(text[:5000])
-            print("\n===== CDCREW HTML DEBUG =====")
-            print(html[:10000])
-
-        if "novelship" in url.lower():
-            print("\n===== NOVELSHIP TEXT DEBUG =====")
-            print(text[:5000])
-            print("\n===== NOVELSHIP HTML DEBUG =====")
-            print(html[:10000])
-
-        if "zneakerz" in url.lower():
-            print("\n===== ZNEAKERZ TEXT DEBUG =====")
-            print(text[:5000])
-            print("\n===== ZNEAKERZ HTML DEBUG =====")
-            print(html[:10000])
-
         if not trust_product_url and not title_is_valid(text[:6000], sku):
             return None, detect_currency(html), "Rejected - product text not confirmed", "To verify"
 
-        symbol = detect_currency(html)
+        symbol = "€"
 
-        price = extract_structured_price(soup)
-        price_source = "structured"
+        price = extract_jsonld_size_price(soup, target_sizes)
+        price_source = "jsonld-size"
+
+        if price is None:
+            price = extract_structured_price(soup)
+            price_source = "structured"
 
         if price is None:
             shopify_price = try_shopify_product_json(url)
@@ -751,6 +890,16 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
                 price = shopify_price
                 price_source = "shopify-json"
 
+        # Domain-specific fallback for Crepdog Crew visible INR price.
+        # Kept after JSON-LD because JSON-LD is size-specific when available.
+        if price is None and "crepdogcrew" in url.lower():
+            cd_price = extract_cdcrew_price(text)
+
+            if cd_price is not None:
+                price = cd_price
+                price_source = "cdcrew"
+
+        # General visible fallback: only accepts prices close to target sizes.
         if price is None:
             visible_price = extract_visible_price_for_sizes(text, target_sizes)
 
@@ -768,20 +917,6 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
             if embedded_price is not None:
                 price = embedded_price
                 price_source = "embedded"
-        
-        if price is None and "crepdogcrew" in url.lower():
-            cd_price = extract_cdcrew_price(text)
-
-            if cd_price is not None:
-                price = cd_price
-                price_source = "cdcrew"
-
-        if price is None and "laced.com" in url.lower():
-            laced_price = extract_laced_price(text)
-
-            if laced_price is not None:
-                price = laced_price
-                price_source = "laced"
 
         size = size_status(text, target_sizes)
 
@@ -948,7 +1083,7 @@ def main():
     ]
 
     summary = (
-        "📊 Sneaker Tracker V12.1\n\n"
+        "📊 Sneaker Tracker V13\n\n"
         f"Siti controllati: {checked}\n"
         f"Product URL usati: {product_url_count}\n"
         f"Trovati via Google: {google_found_count}\n"
