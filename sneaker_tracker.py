@@ -381,60 +381,58 @@ def extract_structured_price(soup):
 def _parse_visible_amount(value):
     return parse_price(value)
 
-
 def _price_matches_with_positions(text):
-patterns = [
-r"€\s?(\d{2,5}(?:[.,]\d{2})?)",
-r"EUR\s?(\d{2,5}(?:[.,]\d{2})?)",
-r"(\d{2,5}(?:[.,]\d{2})?)\s?€",
-r"$\s?(\d{2,5}(?:[.,]\d{2})?)",
-r"USD\s?(\d{2,5}(?:[.,]\d{2})?)",
-r"£\s?(\d{2,5}(?:[.,]\d{2})?)",
-r"GBP\s?(\d{2,5}(?:[.,]\d{2})?)",
-]
+    patterns = [
+        r"€\s?(\d{2,5}(?:[.,]\d{2})?)",
+        r"EUR\s?(\d{2,5}(?:[.,]\d{2})?)",
+        r"(\d{2,5}(?:[.,]\d{2})?)\s?€",
+        r"\$\s?(\d{2,5}(?:[.,]\d{2})?)",
+        r"USD\s?(\d{2,5}(?:[.,]\d{2})?)",
+        r"£\s?(\d{2,5}(?:[.,]\d{2})?)",
+        r"GBP\s?(\d{2,5}(?:[.,]\d{2})?)",
+    ]
 
-```
-prices = []
-raw_text = str(text)
+    prices = []
+    raw_text = str(text)
 
-blocked_context = [
-    "klarna",
-    "rate",
-    "rata",
-    "rate da",
-    "installment",
-    "installments",
-    "paypal 3 rate",
-]
+    blocked_context = [
+        "klarna",
+        "rate",
+        "rata",
+        "rate da",
+        "installment",
+        "installments",
+        "paypal",
+    ]
 
-for pattern in patterns:
-    for match in re.finditer(pattern, raw_text, flags=re.IGNORECASE):
-        raw_value = match.group(1)
-        value = _parse_visible_amount(raw_value)
+    for pattern in patterns:
+        for match in re.finditer(pattern, raw_text, flags=re.IGNORECASE):
 
-        if value is None:
-            continue
+            raw_value = match.group(1)
+            value = _parse_visible_amount(raw_value)
 
-        if not (350 <= value <= 3000):
-            continue
+            if value is None:
+                continue
 
-        context = raw_text[
-            max(0, match.start() - 60):
-            min(len(raw_text), match.end() + 60)
-        ].lower()
+            if value < 350 or value > 3000:
+                continue
 
-        if any(word in context for word in blocked_context):
-            continue
+            context = raw_text[
+                max(0, match.start() - 60):
+                min(len(raw_text), match.end() + 60)
+            ].lower()
 
-        prices.append({
-            "value": value,
-            "start": match.start(),
-            "end": match.end(),
-            "raw": match.group(0),
-        })
+            if any(word in context for word in blocked_context):
+                continue
 
-return prices
+            prices.append({
+                "value": value,
+                "start": match.start(),
+                "end": match.end(),
+                "raw": match.group(0),
+            })
 
+    return prices
 
 def _size_variants(target_sizes):
     variants = []
