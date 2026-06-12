@@ -691,12 +691,6 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
                 price_source = "shopify-json"
 
         if price is None:
-            embedded_price = extract_embedded_price(html)
-            if embedded_price is not None:
-                price = embedded_price
-                price_source = "embedded"
-
-        if price is None:
             price = extract_visible_price_for_sizes(text, target_sizes)
             price_source = "visible-size"
 
