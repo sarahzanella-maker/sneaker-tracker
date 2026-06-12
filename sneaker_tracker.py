@@ -958,7 +958,11 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
         return None, symbol, "Price not found", size
 
     except Exception as error:
-        return None, "€", f"Not verified - {str(error)[:60]}", "To verify"
+        print("\n===== ERROR DEBUG =====")
+        print("URL:", url)
+        print("ERROR TYPE:", type(error).__name__)
+        print("ERROR:", repr(error))
+        return None, "€", f"Not verified - {type(error).__name__}: {str(error)[:80]}", "To verify"
 
 
 def clear_results(ws):
