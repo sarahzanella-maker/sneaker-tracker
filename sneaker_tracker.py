@@ -890,7 +890,7 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
 
         if "novelship" in url.lower():
             print("\n===== NOVELSHIP HTML DEBUG =====")
-            print(html[:30000])
+            print(html[:100000])
 
         if "klekt" in url.lower():
             print("\n===== KLEKT HTML DEBUG =====")
