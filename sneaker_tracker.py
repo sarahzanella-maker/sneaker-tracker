@@ -760,7 +760,6 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
 
         EMBEDDED_ALLOWED = [
             "zneakerz",
-            "hypeclothinga",
         ]
 
         if price is None and any(site in url.lower() for site in EMBEDDED_ALLOWED):
