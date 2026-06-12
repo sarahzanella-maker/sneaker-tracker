@@ -583,8 +583,13 @@ def extract_jsonld_size_price(soup, target_sizes):
         offer_list = offers if isinstance(offers, list) else [offers]
 
         for offer in offer_list:
+            if offer is None:
+                continue
+
             if not isinstance(offer, dict):
                 continue
+
+            currency = str(offer.get("priceCurrency") or "EUR").upper()
 
         currency = (offer.get("priceCurrency") or "EUR").upper()
         availability = str(offer.get("availability", "")).lower()
