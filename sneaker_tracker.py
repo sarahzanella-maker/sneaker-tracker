@@ -871,6 +871,22 @@ def verify_product_page(url, sku, target_sizes, trust_product_url=False):
         soup = BeautifulSoup(html, "html.parser")
         text = soup.get_text(" ", strip=True)
 
+        if "novelship" in url.lower():
+            print("\n===== NOVELSHIP HTML DEBUG =====")
+            print(html[:30000])
+
+        if "klekt" in url.lower():
+            print("\n===== KLEKT HTML DEBUG =====")
+            print(html[:30000])
+
+        if "crepdogcrew" in url.lower():
+            print("\n===== CDCREW HTML DEBUG =====")
+            print(html[:30000])
+
+        if "snkrdunk" in url.lower():
+            print("\n===== SNKRDUNK HTML DEBUG =====")
+            print(html[:30000])
+
         if not trust_product_url and not title_is_valid(text[:6000], sku):
             return None, detect_currency(html), "Rejected - product text not confirmed", "To verify"
 
