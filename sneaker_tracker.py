@@ -290,7 +290,16 @@ def parse_price(value, min_price=80):
 def money(amount, symbol):
     if amount is None:
         return "N/D"
-    return f"{symbol}{amount:.2f}"
+
+    formatted = f"{amount:,.2f}"
+    formatted = (
+        formatted
+        .replace(",", "X")
+        .replace(".", ",")
+        .replace("X", ".")
+    )
+
+    return f"{symbol} {formatted}"
 
 
 def get_trust(site):
