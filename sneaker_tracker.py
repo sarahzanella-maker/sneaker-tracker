@@ -11,6 +11,7 @@ from bs4 import BeautifulSoup
 from google.oauth2.service_account import Credentials
 from playwright.sync_api import sync_playwright
 
+ENABLE_TELEGRAM = False
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
@@ -1217,9 +1218,11 @@ def main():
                     + "\n".join(unique_manual[:10])
                 )
 
-        send_telegram(summary + details)
+        if ENABLE_TELEGRAM:
+            send_telegram(summary + details)
     else:
-        send_telegram(summary + "\nNessun prezzo verificato trovato oggi.")
+        if ENABLE_TELEGRAM:
+            send_telegram(summary + "\nNessun prezzo verificato trovato oggi.")
 
 
 if __name__ == "__main__":
